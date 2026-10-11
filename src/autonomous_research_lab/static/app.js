@@ -119,6 +119,7 @@ function renderProviderStatus(status) {
     : "A sign-in is already pending. Finish it in ChatGPT, or cancel to start again.";
   $("codex-status").textContent = state.codexLoginStarting ? "Opening ChatGPT sign-in…" : status.pending ? pendingMessage : status.error || (status.connected ? "Codex account connected." : "Not connected.");
   $("codex-login").disabled = status.pending || state.codexLoginStarting;
+  $("codex-login").classList.toggle("hidden", status.connected);
   $("codex-cancel").classList.toggle("hidden", !status.pending);
   $("codex-logout").classList.toggle("hidden", !status.connected);
   if (!status.pending) {
