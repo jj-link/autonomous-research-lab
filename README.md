@@ -25,7 +25,23 @@ The research history will retain the designs, code, results, and reasons for sub
 
 ## Current status
 
-Project planning. No research engine or installable application has been implemented yet.
+The record store and inspection CLI are implemented. Experiments are saved as hashed source/settings snapshots, with SQLite execution history, immutable completed attempts, and per-store GPU reservations. Autonomous research and the execution CLI are still being developed.
+
+## Record-store commands
+
+Python 3.10+ is required. From this repository in Linux/WSL:
+
+```sh
+uv venv .venv-linux --python python3
+uv pip install --python .venv-linux/bin/python -e .
+.venv-linux/bin/arl submit path/to/experiment.json
+.venv-linux/bin/arl list
+.venv-linux/bin/arl show EXPERIMENT_ID
+```
+
+Replace `EXPERIMENT_ID` with the ID returned by `submit`. A manifest specifies `name`, a dedicated `source` directory, a relative Python `entrypoint`, and optional `question`, `procedure`, `settings`, `args`, `outputs`, `gpu`, and `limits`. Source paths are resolved relative to the manifest. Submission saves inputs; it does not execute code.
+
+State defaults to `.arl/`; `arl --root DIRECTORY ...` selects another store. Source directories must not contain that store. Symlinks, special files, escaping paths, and source bundles over 256 MiB are rejected.
 
 ## Development plan
 

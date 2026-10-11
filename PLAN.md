@@ -20,6 +20,12 @@ Once started, the system should make routine research decisions autonomously. Th
 
 If an interesting direction requires resources or permissions outside the brief, the system records the proposed direction. It does not silently expand its authority.
 
+### Initial hardware allocation
+
+Allocate one RTX 6000 Pro to experiment execution. Planning and implementation assume this GPU is available; there is no separate hardware-readiness or model-server-shutdown milestone.
+
+Record its actual memory capacity and the host's resource limits during execution setup rather than inferring capacities from the product name.
+
 ## 2. A concrete research scenario
 
 Consider this example goal:
@@ -393,3 +399,11 @@ The demonstration should be one actual autonomous research session:
 - It stops for an explicit reason and produces a readable account of what happened.
 
 That would demonstrate the essential system. It would **not yet establish that it produces novel science or outperforms other approaches**. Those are claims to investigate using the evaluation process above.
+
+## 10. Implementation checkpoints
+
+### Recorded inputs and inspection CLI
+
+Implemented immutable experiment snapshots, SHA-256 bundle verification, SQLite attempt/event history, terminal-record protection, case-normalized GPU reservations, and explicit attempt identities for crash-safe coordination.
+
+Verification: 15 record/manifest regression checks passed on Python 3.10. The installed `arl` CLI submitted a bundle, then separate `show` and `list` processes recovered the same ID, settings, and bundle hash. This checkpoint verifies input recording and inspection, not experiment execution or autonomous research.
