@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "gpu-reduction-order",
+  "question": "How do input order and threads per block change the numerical error of a two-pass float32 GPU reduction under cancellation?",
+  "procedure": "Use 65536 copies each of 1e8, 1, and -1e8. Compare interleaved and grouped orders with 128 and 256 threads per block. Both reduction passes execute on the GPU. Compare measured sums against math.fsum of the identical stored float32 values and retain all timing samples. No outcome is assumed.",
+  "source": "code",
+  "entrypoint": "main.py",
+  "gpu": true,
+  "settings": {"study": "reduction", "triples": 65536, "block_sizes": [128, 256], "repeats": 7},
+  "outputs": ["results.json"],
+  "limits": {"wall_seconds": 120, "memory_bytes": 2147483648, "output_bytes": 8388608, "log_bytes": 1048576, "pids": 64, "cpus": null}
+}

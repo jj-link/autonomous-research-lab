@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "gpu-vector-add",
+  "question": "How does vector size change the measured CUDA event interval for float32 addition, and does every output match a rounded float32 CPU reference?",
+  "procedure": "Generate seeded float32 vectors at two sizes. Run an actual PTX addition kernel with three warmups and seven CUDA-event measurements. Copy results back and compare every element to a float32-rounded CPU reference. Transfers and setup are outside the event interval.",
+  "source": "code",
+  "entrypoint": "main.py",
+  "gpu": true,
+  "settings": {"study": "vector-add", "sizes": [65536, 1048576], "seed": 42, "repeats": 7},
+  "outputs": ["results.json"],
+  "limits": {"wall_seconds": 120, "memory_bytes": 2147483648, "output_bytes": 8388608, "log_bytes": 1048576, "pids": 64, "cpus": null}
+}

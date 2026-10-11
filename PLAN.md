@@ -407,3 +407,20 @@ That would demonstrate the essential system. It would **not yet establish that i
 Implemented immutable experiment snapshots, SHA-256 bundle verification, SQLite attempt/event history, terminal-record protection, case-normalized GPU reservations, and explicit attempt identities for crash-safe coordination.
 
 Verification: 15 record/manifest regression checks passed on Python 3.10. The installed `arl` CLI submitted a bundle, then separate `show` and `list` processes recovered the same ID, settings, and bundle hash. This checkpoint verifies input recording and inspection, not experiment execution or autonomous research.
+
+### Isolated execution and two real GPU studies
+
+Implemented rootless Podman execution, immutable image selection, container ownership checks, explicit GPU leases, bounded output/log collection, stop, and supervisor recovery without duplicate execution. The worker records observed CPU time and host memory; these are not complete GPU billing or energy measurements.
+
+Verification on NVIDIA-Workbench WSL: 12 execution/time regression checks passed, including denied outbound networking, read-only inputs, memory exhaustion, wall timeout, partial-output retention, storage overrun, stop, and killing/recovering a supervisor. After correcting subprocess reaping, the failure/recovery/stop scenarios also passed with ResourceWarnings treated as errors. The stop fixture now allows startup independently of its experiment runtime instead of imposing an unsupported 15-second startup guarantee.
+
+The installed CLI executed both included CUDA studies on `GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309`, an NVIDIA RTX PRO 6000 Blackwell Workstation Edition with approximately 95.6 GiB reported memory:
+
+| Study | Recorded attempt | Observed result |
+|---|---|---|
+| Vector addition | `run_8fed60e7acdb42d685d92169d0c77d99` | 65,536 and 1,048,576 elements both exactly matched the float32 CPU reference. Median CUDA-event intervals over seven trials were 0.008960 ms and 0.011232 ms. |
+| Reduction order | `run_cf138baefaf94b97ae446c5d7e78ef5c` | For the same 196,608 float32 values, reference sum 65,536: interleaved inputs produced 2,731 with 128 threads/block and 5,461 with 256; grouped inputs produced 0 for both block sizes. |
+
+The second study is a completed execution with large numerical error, not a crashed experiment. Its synthetic cancellation-heavy inputs demonstrate sensitivity to summation order; they do not establish general algorithm rankings. CUDA-event intervals can include host submission/scheduling gaps and are not pure kernel or end-to-end application benchmarks. Raw observations, hashes, code snapshots, and logs remain in the local `.arl` store.
+
+The verified GPU path keeps the container root and WSL driver mounts read-only. WSL's shared GPU device is not an adversarial per-adapter isolation boundary. Native CDI execution, agent-designed studies, and autonomous follow-up selection have not yet been demonstrated.
