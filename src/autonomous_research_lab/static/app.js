@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const token = document.querySelector('meta[name="arl-token"]').content;
-const state = {overview: null, selected: {programs: null, experiments: null, attempts: null}, signatures: {}, tab: "programs"};
+const state = {overview: null, selected: {programs: null, experiments: null, attempts: null}, signatures: {}, tab: "programs", codexLoginStarting: false};
 const terminal = new Set(["completed", "failed", "stopped", "timed_out", "interrupted", "limit_exceeded"]);
 const sections = {
   programs: {title: "Research programs", description: "Questions, experiments, and decisions—kept together.", singular: "Research program", empty: "Your next investigation starts here.", hint: "Create a research brief to give the lab a question, a scope, and clear limits."},
@@ -114,8 +114,11 @@ function changeProvider() {
   $("model-token-note").textContent = codex ? "Codex manages output length. Call limits and request timeouts still apply; no numeric output-token cap is claimed." : "Sent as the selected server's requested output-token limit.";
 }
 function renderProviderStatus(status) {
-  $("codex-status").textContent = status.pending ? "Waiting for ChatGPT sign-in…" : status.error || (status.connected ? "Codex account connected." : "Not connected.");
-  $("codex-login").disabled = status.pending;
+  const pendingMessage = $("codex-continue").hasAttribute("href")
+    ? "Complete sign-in in ChatGPT. Use the link below if its tab did not open."
+    : "A sign-in is already pending. Finish it in ChatGPT, or cancel to start again.";
+  $("codex-status").textContent = state.codexLoginStarting ? "Opening ChatGPT sign-in…" : status.pending ? pendingMessage : status.error || (status.connected ? "Codex account connected." : "Not connected.");
+  $("codex-login").disabled = status.pending || state.codexLoginStarting;
   $("codex-cancel").classList.toggle("hidden", !status.pending);
   $("codex-logout").classList.toggle("hidden", !status.connected);
   if (!status.pending) {
@@ -125,19 +128,46 @@ function renderProviderStatus(status) {
 }
 for (const [id, action] of [["codex-login", "login"], ["codex-cancel", "cancel"], ["codex-logout", "logout"]]) {
   $(id).addEventListener("click", async () => {
+    if (action === "login" && state.codexLoginStarting) return;
+    let signInTab = null;
+    if (action === "login") state.codexLoginStarting = true;
     $(id).disabled = true;
     error("");
     try {
+      if (action === "login") {
+        // Reserve the tab inside the click gesture, before awaiting OAuth setup.
+        signInTab = window.open("about:blank", "_blank");
+        if (signInTab) {
+          signInTab.opener = null;
+          signInTab.document.title = "ChatGPT sign-in";
+          const policy = signInTab.document.createElement("meta");
+          policy.name = "referrer";
+          policy.content = "no-referrer";
+          signInTab.document.head.append(policy);
+          signInTab.document.body.textContent = "Preparing ChatGPT sign-in…";
+        }
+      }
       const response = await api("/api/providers/codex/" + action, {});
       if (action === "login") {
         const url = new URL(response.authorization_url);
         if (url.origin !== "https://auth.openai.com") throw new Error("Unexpected Codex authorization destination.");
         $("codex-continue").href = url.href;
         $("codex-continue").classList.remove("hidden");
+        if (signInTab && !signInTab.closed) {
+          try { signInTab.location.replace(url.href); }
+          catch { signInTab.close(); } // The visible link remains the fallback.
+        }
+        signInTab = null;
       }
       await refresh();
-    } catch (exception) { error(exception.message); }
-    finally { $(id).disabled = id === "codex-login" && Boolean(state.overview?.providers.codex.pending); }
+    } catch (exception) {
+      if (signInTab && !signInTab.closed) signInTab.close();
+      error(exception.message);
+    } finally {
+      if (action === "login") state.codexLoginStarting = false;
+      if (state.overview) renderProviderStatus(state.overview.providers.codex);
+      $(id).disabled = id === "codex-login" && (state.codexLoginStarting || Boolean(state.overview?.providers.codex.pending));
+    }
   });
 }
 $("brief-provider").addEventListener("change", changeProvider);

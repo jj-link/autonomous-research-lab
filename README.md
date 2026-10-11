@@ -179,7 +179,7 @@ After configuring the runner, launch the dashboard. Codex sign-in can happen in 
 .venv-linux/bin/arl serve --host 127.0.0.1 --port 8767
 ```
 
-Open <http://127.0.0.1:8767/>. To connect Codex, click **Sign in with ChatGPT** in the sidebar's **Codex account** panel, then follow **Continue to ChatGPT**. These account controls remain visible on every section; you do not need to open or create a research brief first.
+Open <http://127.0.0.1:8767/>. To connect Codex, click **Sign in with ChatGPT** in the sidebar's **Codex account** panel. It opens a new tab automatically; complete sign-in there. If your browser blocks the tab, or you close it before sign-in opens, use **Continue to ChatGPT** in the same panel. A setup failure closes the unused blank tab and displays the error in the dashboard. These account controls remain visible on every section; you do not need to open or create a research brief first.
 
 Use **New research program** to open a brief, select a provider, and use **Discover models** to load that provider's actual catalog. Signing in does not change the draft's selected provider. Provider changes affect the draft, not existing programs. The sidebar separates research programs, saved experiments, and run history; selecting a record opens its details below the collection. The dashboard uses the same records and coordinator as the CLI, including start/pause/resume/stop controls, sources, model calls, code/settings, measurements, logs, artifact downloads, and reports. Light/dark styling follows your system preference.
 
