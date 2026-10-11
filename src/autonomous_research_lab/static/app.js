@@ -3,6 +3,11 @@ const $ = (id) => document.getElementById(id);
 const token = document.querySelector('meta[name="arl-token"]').content;
 const state = {overview: null, selected: {programs: null, experiments: null, attempts: null}, signatures: {}, tab: "programs"};
 const terminal = new Set(["completed", "failed", "stopped", "timed_out", "interrupted", "limit_exceeded"]);
+const sections = {
+  programs: {title: "Research programs", description: "Questions, experiments, and decisions—kept together.", singular: "Research program", empty: "Your next investigation starts here.", hint: "Create a research brief to give the lab a question, a scope, and clear limits."},
+  experiments: {title: "Experiments", description: "The designs and code behind each investigation.", singular: "Saved experiment", empty: "No saved experiments yet.", hint: "Designs and their code snapshots will appear here as the research develops."},
+  attempts: {title: "Run history", description: "Every execution, with its measurements and a traceable record.", singular: "Execution attempt", empty: "No runs recorded yet.", hint: "Completed, failed, and interrupted attempts will all remain part of the record."}
+};
 const node = (tag, text, className) => {
   const element = document.createElement(tag);
   if (text !== undefined) element.textContent = text;
@@ -44,9 +49,16 @@ function card(title, subtitle) {
   if (subtitle) result.append(node("p", subtitle, "subtle mono"));
   return result;
 }
-function badge(value) { return node("span", value, "badge " + (terminal.has(value) ? "settled" : "active-state")); }
+function badge(value) {
+  const result = node("span", value.replaceAll("_", " "), "badge");
+  result.dataset.state = value;
+  return result;
+}
 function switchTab(tab) {
   state.tab = tab;
+  $("section-title").textContent = sections[tab].title;
+  $("section-label").textContent = sections[tab].title;
+  $("section-description").textContent = sections[tab].description;
   document.querySelectorAll(".tab").forEach((item) => {
     const active = item.dataset.tab === tab;
     item.classList.toggle("active", active);
@@ -58,9 +70,21 @@ async function select(kind, id) {
   state.selected[kind] = id;
   delete state.signatures[kind];
   switchTab(kind);
+  renderLists();
   await renderDetail(kind);
-  $(kind.slice(0, -1) + "-detail").scrollIntoView({block: "start", behavior: "smooth"});
+  if (state.tab !== kind || state.selected[kind] !== id) return;
+  const target = $(kind.slice(0, -1) + "-detail");
+  target.tabIndex = -1;
+  target.focus({preventScroll: true});
+  target.scrollIntoView({block: "start"});
 }
+function openBrief() {
+  switchTab("programs");
+  $("brief-card").open = true;
+  $("brief-card").scrollIntoView({block: "start"});
+  $("brief-goal").focus({preventScroll: true});
+}
+$("new-program").addEventListener("click", openBrief);
 function modelConfig(catalog = false) {
   const provider = $("brief-provider").value;
   const config = {provider};
@@ -146,23 +170,45 @@ function renderLists() {
   const overview = state.overview;
   const runner = overview.runner;
   renderProviderStatus(overview.providers.codex);
-  const allocation = runner.gpu_uuid ? `GPU ${runner.gpu_uuid}` : "No GPU configured";
+  const allocation = runner.gpu_uuid || "No GPU configured";
   $("runner-status").textContent = runner.configured ? `${runner.image} · ${allocation}` : runner.detail;
+  $("runner-label").textContent = runner.configured ? "Runner configured" : "Runner not configured";
+  $("runner-label").dataset.configured = String(runner.configured);
+  const experimentNames = new Map(overview.experiments.map(row => [row.id, row.manifest.name]));
   for (const kind of ["programs", "experiments", "attempts"]) {
     const target = $(kind + "-list");
     const fragment = document.createDocumentFragment();
     const rows = overview[kind];
-    if (!rows.length) fragment.append(node("p", `No recorded ${kind} yet.`, "empty"));
+    $(kind + "-count").textContent = String(rows.length);
+    const signature = JSON.stringify([rows, state.selected[kind], kind === "attempts" ? [...experimentNames] : null]);
+    if (state.signatures["list-" + kind] === signature) continue;
+    if (!rows.length) {
+      const empty = node("div", undefined, "empty");
+      const mark = node("span", undefined, "empty-mark");
+      mark.setAttribute("aria-hidden", "true");
+      empty.append(mark, node("h3", sections[kind].empty), node("p", sections[kind].hint));
+      fragment.append(empty);
+    }
     for (const row of rows) {
-      const title = row.brief?.goal || row.manifest?.name || row.id;
-      const entry = node("article", undefined, "list-row");
-      const main = node("div");
-      main.append(button(title, () => select(kind, row.id), "record-link"), node("p", row.id, "mono subtle"));
-      entry.append(main);
-      if (row.state) entry.append(badge(row.state));
+      const title = row.brief?.goal || row.manifest?.name || experimentNames.get(row.experiment_id) || "Execution attempt";
+      const entry = node("article", undefined, "list-row" + (state.selected[kind] === row.id ? " selected" : ""));
+      const heading = node("div", undefined, "record-row-heading");
+      heading.append(node("span", sections[kind].singular, "eyebrow"));
+      if (row.state) heading.append(badge(row.state));
+      const link = button(title, () => select(kind, row.id), "record-link");
+      if (state.selected[kind] === row.id) link.setAttribute("aria-current", "true");
+      entry.append(heading, link);
+      const context = row.brief?.model?.model || row.manifest?.question;
+      if (context) entry.append(node("p", context, "record-context"));
+      const footer = node("div", undefined, "record-row-footer");
+      const arrow = node("span", "↗", "record-arrow");
+      arrow.setAttribute("aria-hidden", "true");
+      footer.append(node("span", row.id, "mono"), arrow);
+      entry.append(footer);
       fragment.append(entry);
     }
     target.replaceChildren(fragment);
+    state.signatures["list-" + kind] = signature;
   }
 }
 async function programView(program) {

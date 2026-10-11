@@ -8,28 +8,53 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header class="app-header">
-  <div class="app-title">
-    <h1>Autonomous Research Lab</h1>
-    <p class="subtle">Local dashboard for recorded research programs. Loopback only.</p>
+<a class="skip-link" href="#workspace-main">Skip to workspace</a>
+<div class="app-shell">
+<aside class="sidebar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="34" height="34" rx="8" stroke="currentColor"/>
+      <path d="M12 28V12h16M12 20h16M20 12v16" stroke="currentColor" stroke-width="1.5"/>
+      <circle cx="28" cy="28" r="3" fill="currentColor"/>
+    </svg>
+    <span>Autonomous<br><strong>Research Lab</strong></span>
   </div>
-  <div id="runner-status" class="runner-status" aria-live="polite">Loading runner status&hellip;</div>
+  <p class="nav-label">Workspace</p>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" class="tab active" data-tab="programs" id="tab-programs-btn" aria-pressed="true"><span class="nav-index" aria-hidden="true">01</span><span>Research programs</span><span class="nav-count" id="programs-count" aria-hidden="true">—</span></button>
+    <button type="button" class="tab" data-tab="experiments" id="tab-experiments-btn" aria-pressed="false"><span class="nav-index" aria-hidden="true">02</span><span>Experiments</span><span class="nav-count" id="experiments-count" aria-hidden="true">—</span></button>
+    <button type="button" class="tab" data-tab="attempts" id="tab-attempts-btn" aria-pressed="false"><span class="nav-index" aria-hidden="true">03</span><span>Run history</span><span class="nav-count" id="attempts-count" aria-hidden="true">—</span></button>
+  </nav>
+  <details class="runner-panel" open>
+    <summary>Execution environment</summary>
+    <p id="runner-label" class="runner-label">Checking configuration</p>
+    <div id="runner-status" class="runner-status" aria-live="polite">Loading runner status&hellip;</div>
+  </details>
+  <div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span> Local workspace <span class="mono">Loopback only</span></div>
+</aside>
+
+<div class="workspace">
+<header class="app-header">
+  <p class="breadcrumb">Workspace <span aria-hidden="true">/</span> <span id="section-label">Research programs</span></p>
+  <span class="header-note">Design. Observe. Follow up.</span>
 </header>
-
-<nav class="tabs" aria-label="Sections">
-  <button type="button" class="tab active" data-tab="programs" id="tab-programs-btn">Research programs</button>
-  <button type="button" class="tab" data-tab="experiments" id="tab-experiments-btn">Experiments</button>
-  <button type="button" class="tab" data-tab="attempts" id="tab-attempts-btn">Run history</button>
-</nav>
-
-<main>
+<main id="workspace-main" tabindex="-1">
+  <div class="page-intro">
+    <div>
+      <p class="eyebrow">Autonomous Research Lab</p>
+      <h1 id="section-title">Research programs</h1>
+      <p id="section-description" class="page-description">Questions, experiments, and decisions—kept together.</p>
+    </div>
+    <button type="button" id="new-program"><span aria-hidden="true">+</span> New research program</button>
+  </div>
   <p id="global-error" class="banner error hidden" role="alert"></p>
   <p id="global-note" class="banner subtle hidden" aria-live="polite"></p>
 
   <section id="tab-programs" class="tab-panel" aria-labelledby="tab-programs-btn">
-    <details class="card" id="brief-card" open>
-      <summary>Submit a research brief</summary>
+    <details class="card brief-card" id="brief-card">
+      <summary><span class="brief-summary"><span class="eyebrow">Start an investigation</span><strong>New research brief</strong><span class="hint">Define the question, choose a model, and set the limits.</span></span><span class="disclosure-mark" aria-hidden="true"></span></summary>
       <form id="brief-form" class="grid-form" novalidate>
+        <div class="form-section-heading span-2"><span class="section-number">01</span><h2>The question</h2></div>
         <div class="field span-2">
           <label for="brief-goal">Research goal <span class="required">(required)</span></label>
           <textarea id="brief-goal" name="goal" rows="3" required
@@ -40,6 +65,7 @@
           <input id="brief-scope" name="scope" type="text" autocomplete="off"
             placeholder="What kinds of work are permitted?">
         </div>
+        <div class="form-section-heading span-2"><span class="section-number">02</span><h2>The model</h2></div>
         <div class="field span-2">
           <label for="brief-provider">Model provider</label>
           <select id="brief-provider">
@@ -53,7 +79,7 @@
           <strong>Codex account</strong>
           <p id="codex-status" class="hint" aria-live="polite">Checking sign-in…</p>
           <div class="actions">
-            <button type="button" id="codex-login" class="ghost">Sign in with ChatGPT</button>
+            <button type="button" id="codex-login">Sign in with ChatGPT</button>
             <button type="button" id="codex-cancel" class="ghost hidden">Cancel sign-in</button>
             <button type="button" id="codex-logout" class="ghost hidden">Disconnect Codex</button>
             <a id="codex-continue" class="hidden" target="_blank" rel="noopener noreferrer">Continue to ChatGPT</a>
@@ -79,6 +105,7 @@
             placeholder="ARL_MODEL_API_KEY">
           <p class="hint">Variable name only. The key value is set in the server environment and is never entered or stored here.</p>
         </div>
+        <div class="form-section-heading span-2"><span class="section-number">03</span><h2>The boundaries</h2></div>
         <div class="field">
           <label for="brief-max-experiments">Max experiments (1&ndash;20)</label>
           <input id="brief-max-experiments" name="max_experiments" type="number" inputmode="numeric"
@@ -121,20 +148,36 @@
         </div>
       </form>
     </details>
-    <div id="program-detail" class="stack"></div>
-    <div id="programs-list" class="stack"></div>
+    <div class="collection">
+      <div class="collection-heading"><h2>Saved programs</h2><span class="eyebrow">Research record</span></div>
+      <div id="programs-list" class="record-list"></div>
+    </div>
+    <div id="program-detail" class="stack record-detail"></div>
   </section>
 
   <section id="tab-experiments" class="tab-panel hidden" aria-labelledby="tab-experiments-btn">
-    <div id="experiment-detail" class="stack"></div>
-    <div id="experiments-list" class="stack"></div>
+    <div class="collection">
+      <div class="collection-heading"><h2>Saved experiments</h2><span class="eyebrow">Designs &amp; code</span></div>
+      <div id="experiments-list" class="record-list"></div>
+    </div>
+    <div id="experiment-detail" class="stack record-detail"></div>
   </section>
 
   <section id="tab-attempts" class="tab-panel hidden" aria-labelledby="tab-attempts-btn">
-    <div id="attempt-detail" class="stack"></div>
-    <div id="attempts-list" class="stack"></div>
+    <div class="collection">
+      <div class="collection-heading"><h2>Recorded attempts</h2><span class="eyebrow">Execution history</span></div>
+      <div id="attempts-list" class="record-list"></div>
+    </div>
+    <div id="attempt-detail" class="stack record-detail"></div>
   </section>
 </main>
+
+<footer class="app-footer">
+  <span class="footer-label">A note on evidence</span>
+  <p>Execution status and scientific outcome are recorded separately.<br>A completed run is not automatically a scientific success.</p>
+</footer>
+</div>
+</div>
 
 <div id="report-dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="report-title">
   <div class="dialog-panel">
@@ -146,10 +189,6 @@
   </div>
 </div>
 
-<footer class="app-footer">
-  <p class="subtle">Execution status and scientific outcome are reported separately and exactly as recorded;
-  a completed run is not automatically a scientific success.</p>
-</footer>
 
 <noscript><p class="banner error">This dashboard requires JavaScript.</p></noscript>
 <script src="/app.js"></script>
