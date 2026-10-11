@@ -40,17 +40,40 @@
           <input id="brief-scope" name="scope" type="text" autocomplete="off"
             placeholder="What kinds of work are permitted?">
         </div>
-        <div class="field">
+        <div class="field span-2">
+          <label for="brief-provider">Model provider</label>
+          <select id="brief-provider">
+            <option value="openai-codex">Codex (ChatGPT account)</option>
+            <option value="spark">Spark cluster (local models)</option>
+            <option value="openai-compatible">OpenAI-compatible API</option>
+          </select>
+          <p class="hint">Used for all research roles in this program. Provider changes apply to this draft only; failures never switch providers.</p>
+        </div>
+        <section id="codex-account" class="field span-2">
+          <strong>Codex account</strong>
+          <p id="codex-status" class="hint" aria-live="polite">Checking sign-in…</p>
+          <div class="actions">
+            <button type="button" id="codex-login" class="ghost">Sign in with ChatGPT</button>
+            <button type="button" id="codex-cancel" class="ghost hidden">Cancel sign-in</button>
+            <button type="button" id="codex-logout" class="ghost hidden">Disconnect Codex</button>
+            <a id="codex-continue" class="hidden" target="_blank" rel="noopener noreferrer">Continue to ChatGPT</a>
+          </div>
+          <p class="hint">No API key required. This app keeps a separate protected session; it does not reuse another project's credentials.</p>
+        </section>
+        <div class="field" id="model-url-field">
           <label for="brief-model-url">Model endpoint</label>
           <input id="brief-model-url" name="model_base_url" type="url" required spellcheck="false"
             placeholder="https://api.openai.com/v1">
         </div>
         <div class="field">
           <label for="brief-model-name">Model name</label>
-          <input id="brief-model-name" name="model" type="text" required autocomplete="off"
-            placeholder="Cloud model ID">
+          <input id="brief-model-name" name="model" type="text" required autocomplete="off" list="provider-models"
+            placeholder="Discover models or enter an exact model ID">
+          <datalist id="provider-models"></datalist>
+          <button type="button" id="model-discover" class="ghost">Discover models</button>
+          <p id="model-discovery-status" class="hint" aria-live="polite"></p>
         </div>
-        <div class="field">
+        <div class="field" id="model-key-field">
           <label for="brief-model-key-env">API key environment variable <span class="subtle">(optional)</span></label>
           <input id="brief-model-key-env" name="api_key_env" type="text" autocomplete="off" spellcheck="false"
             placeholder="ARL_MODEL_API_KEY">
@@ -81,7 +104,7 @@
             <div class="field span-2"><label for="brief-sources">Source URLs (public HTTPS, one per line)</label><textarea id="brief-sources" rows="2"></textarea></div>
             <div class="field span-2"><label for="brief-data">Approved text or CSV data (256 KiB total)</label><input id="brief-data" type="file" multiple></div>
             <div class="field"><label for="brief-policy">Research policy</label><select id="brief-policy"><option value="candidate_comparison">Compare candidate experiments</option><option value="direct">Choose one follow-up directly</option><option value="fixed_plan">Commit to an initial fixed plan</option></select></div>
-            <div class="field"><label for="brief-tokens">Output tokens per model call</label><input id="brief-tokens" type="number" min="128" max="32768" value="8192"></div>
+            <div class="field"><label for="brief-tokens">Output tokens per model call</label><input id="brief-tokens" type="number" min="128" max="32768" value="8192"><p id="model-token-note" class="hint"></p></div>
             <div class="field"><label for="brief-memory">Host memory per experiment (MiB)</label><input id="brief-memory" type="number" min="16" value="2048"></div>
             <div class="field"><label for="brief-run-wall">Time per experiment (seconds)</label><input id="brief-run-wall" type="number" min="1" value="120"></div>
             <div class="field"><label for="brief-output">Output storage per experiment (MiB)</label><input id="brief-output" type="number" min="1" value="64"></div>

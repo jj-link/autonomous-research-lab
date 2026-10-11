@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
 from .execution import configuration, run as run_experiment, stop as stop_attempt
+from .model_client import SPARK_BASE_URL, list_models
 from .models import LabError, TERMINAL_STATES, relative_path
 from .research import ResearchEngine
 from .store import Store
@@ -185,7 +186,7 @@ class _App:
 
     def _token_ok(self, headers: Any) -> bool:
         supplied = headers.get(TOKEN_HEADER)
-        return isinstance(supplied, str) and hmac.compare_digest(supplied, self.token)
+        return isinstance(supplied, str) and supplied.isascii() and hmac.compare_digest(supplied, self.token)
 
     # -- routing ---------------------------------------------------------
 
@@ -207,6 +208,8 @@ class _App:
             return self._static("style.css", "text/css; charset=utf-8")
         if segments == ["api", "overview"]:
             return self._overview()
+        if segments == ["api", "providers", "codex"]:
+            return _json_response(200, self.engine.auth.status())
         if len(segments) == 3 and segments[0] == "api":
             kind, record_id = segments[1], segments[2]
             if kind == "programs":
@@ -252,6 +255,12 @@ class _App:
         raise _HttpError(404, "Not found")
 
     def _post(self, path: str, segments: list[str], body: bytes | None) -> _Response:
+        if segments == ["api", "providers", "models"]:
+            return _json_response(200, {"models": list_models(self._json_body(body), auth=self.engine.auth)})
+        if len(segments) == 4 and segments[:3] == ["api", "providers", "codex"] and segments[3] in {"login", "cancel", "logout"}:
+            self._json_body(body)
+            operation = {"login": self.engine.auth.begin_login, "cancel": self.engine.auth.cancel_login, "logout": self.engine.auth.logout}[segments[3]]
+            return _json_response(200, operation())
         if segments == ["api", "programs"]:
             return _json_response(201, self.engine.create(self._json_body(body)))
         if len(segments) == 4 and segments[:2] == ["api", "programs"] and segments[3] in {"start", "pause", "resume", "stop"}:
@@ -276,6 +285,8 @@ class _App:
 
     @staticmethod
     def _is_post_route(segments: list[str]) -> bool:
+        if segments == ["api", "providers", "models"] or (len(segments) == 4 and segments[:3] == ["api", "providers", "codex"] and segments[3] in {"login", "cancel", "logout"}):
+            return True
         if segments == ["api", "programs"]:
             return True
         return len(segments) == 4 and segments[0] == "api" and (
@@ -286,6 +297,8 @@ class _App:
 
     @staticmethod
     def _is_get_route(path: str, segments: list[str]) -> bool:
+        if segments == ["api", "providers", "codex"]:
+            return True
         if path == "/" or path in {"/app.js", "/style.css"}:
             return True
         if segments == ["api", "overview"]:
@@ -335,6 +348,7 @@ class _App:
             "attempts": self.store.list_attempts(active_only=False),
             "programs": self.engine.list(),
             "runner": runner,
+            "providers": {"codex": self.engine.auth.status(), "spark_base_url": SPARK_BASE_URL},
         })
 
     def _attempt_with_events(self, attempt_id: str) -> dict:
@@ -501,6 +515,14 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def server_close(self):
+        try:
+            app = getattr(self, "app", None)
+            if app is not None:
+                app.engine.auth.close()
+        finally:
+            super().server_close()
 
 
 class _IPv6Server(_Server):

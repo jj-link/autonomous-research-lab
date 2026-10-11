@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
 
 from .models import LabError, load_manifest, read_json
 from .store import Store
@@ -53,6 +54,15 @@ def main(argv=None):
     web = commands.add_parser("serve", help="Run the loopback browser interface")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
+    provider = commands.add_parser("provider", help="Manage Codex sign-in and discover actual provider models")
+    provider_commands = provider.add_subparsers(dest="provider_command", required=True)
+    for name in ("status", "login", "logout"):
+        provider_commands.add_parser(name)
+    catalog = provider_commands.add_parser("models")
+    catalog.add_argument("--provider", choices=("openai-codex", "spark", "openai-compatible"), required=True)
+    catalog.add_argument("--base-url")
+    catalog.add_argument("--api-key-env")
+    catalog.add_argument("--timeout", type=int, default=30)
     evaluation = commands.add_parser("evaluate", help="Prepare/run controlled research or score an existing evaluation")
     evaluation.add_argument("--list", action="store_true")
     evaluation.add_argument("--model-config", type=Path)
@@ -104,6 +114,31 @@ def main(argv=None):
             from .web import serve
             serve(store, args.host, args.port)
             return 0
+        elif args.command == "provider":
+            from .codex_auth import CodexAuth
+            from .model_client import list_models
+            auth = CodexAuth(store.root)
+            try:
+                action = args.provider_command
+                if action == "status":
+                    value = auth.status()
+                elif action == "logout":
+                    value = auth.logout()
+                elif action == "models":
+                    config = {"provider": args.provider, "request_timeout_seconds": args.timeout}
+                    if args.base_url is not None:
+                        config["base_url"] = args.base_url
+                    if args.api_key_env is not None:
+                        config["api_key_env"] = args.api_key_env
+                    value = {"provider": args.provider, "models": list_models(config, auth=auth)}
+                else:
+                    print(json.dumps(auth.begin_login(), indent=2), flush=True)
+                    while auth.status()["pending"]:
+                        time.sleep(0.2)
+                    value = auth.status()
+                    exit_code = int(not value["connected"] or bool(value["error"]))
+            finally:
+                auth.close()
         elif args.command == "evaluate":
             from . import evaluation
             if args.list:

@@ -27,7 +27,7 @@ The research history will retain the designs, code, results, and reasons for sub
 
 The recorded runner, bounded research coordinator, controlled evaluation suite, and local browser interface are implemented. Two real CUDA experiments have run on the allocated RTX PRO 6000.
 
-The coordinator has also been exercised with scripted HTTP responses and real isolated executions: a failed implementation, a repair, analysis, an evidence-linked follow-up, and budget stopping. **That is software verification, not an autonomous language-model research demonstration.** A live cloud-model run and comparison of research policies remain unverified because the application has no cloud API credential configured.
+The coordinator has also been exercised with scripted HTTP responses and real isolated executions: a failed implementation, a repair, analysis, an evidence-linked follow-up, and budget stopping. **That is software verification, not an autonomous language-model research demonstration.** Explicit Codex-account, Spark-cluster, and OpenAI-compatible providers are implemented. Spark discovery and a small real generation have passed; Codex's authentication lifecycle, protected storage, and streaming protocol have been exercised, but live Codex inference still requires this app's independent account sign-in. Live autonomous research and matched-policy comparisons remain unverified.
 
 ## Record-store commands
 
@@ -78,32 +78,63 @@ The UUID above identifies this project's allocated RTX PRO 6000, not a portable 
 
 ## Start a research program
 
-The director, selector, builder, and analyst use the cloud model configured in the research brief. There is no built-in model choice or automatic local-model fallback. The client expects an OpenAI-compatible `/chat/completions` endpoint and JSON-object message content; provider compatibility must be checked with the model you select.
+The director, selector, builder, and analyst use the provider and model recorded in the research brief. Provider selection is explicit; an error never switches to a local model or another service. Model calls do not run a Codex CLI agent or give the provider host tools.
 
-Set the API key in the **Linux/WSL process environment** before starting the CLI or dashboard. For example, in Bash:
+### Codex with your ChatGPT account
+
+No API key is required. Sign in once for the selected research store, using the same account you use for Codex:
+
+```sh
+.venv-linux/bin/arl provider login
+.venv-linux/bin/arl provider status
+.venv-linux/bin/arl provider models --provider openai-codex
+```
+
+Open the authorization URL printed by `login`; the command waits up to five minutes for the browser callback on `localhost:1455`. Finish or cancel another sign-in if that port is occupied. The dashboard offers the same sign-in, cancellation, and disconnect controls.
+
+This app creates its own OAuth session; it does not import another project's or Codex CLI's rotating refresh grant. Windows and WSL protect the saved session with Windows CurrentUser DPAPI. Native Linux/macOS requires a supported, unlocked OS keyring and installation with the `secure-keyring` extra (`python -m pip install -e '.[secure-keyring]'`). There is no plaintext fallback. Storage and refresh locks are scoped to the selected store and platform: use the same `--root` and runtime for sign-in and research. Moving the store, switching between Windows and WSL, or changing Windows user requires a separate sign-in. DPAPI does not protect against compromise of the same Windows user or an administrator.
+
+`arl provider logout` deletes this store/platform's saved session and cancels pending sign-in. It does not revoke your account globally or terminate a model request already in flight. Credentials are not placed in briefs, experiment environments, or browser storage. The OAuth and Responses protocol follows the [upstream Codex implementation](https://github.com/openai/codex/tree/main/codex-rs); account availability and usage limits still apply.
+
+Codex controls output length. Set `max_output_tokens_per_call` to `null` or omit it; a numeric value is rejected rather than recorded as an unenforced cap. Call budgets, request timeouts, and the response-byte bound still apply. Missing token usage remains unknown.
+
+### Spark cluster or another OpenAI-compatible server
+
+Select **Spark cluster (local models)** to use the cluster explicitly. Its default base URL is `http://100.92.139.82:8888/v1`; it can be overridden in the brief or dashboard. Discover the currently served model rather than assuming a permanent model name:
+
+```sh
+.venv-linux/bin/arl provider models --provider spark
+```
+
+The verified catalog advertised `GLM-5.3-Flash-EXL3`. A Spark model assignment is `{"provider":"spark","model":"GLM-5.3-Flash-EXL3"}`. The current cluster endpoint is keyless and reachable over the private Tailscale network. Its availability is independent of the RTX PRO 6000 allocated to experiment execution.
+
+For another server, use `{"provider":"openai-compatible","base_url":"https://api.openai.com/v1","model":"YOUR_MODEL_ID","api_key_env":"ARL_MODEL_API_KEY"}`. Spark and API providers use `/chat/completions` and must return JSON-object message content; their model catalogs use `/models`. Set a numeric output-token limit for these providers. Server support must be checked with the selected model.
+
+If an API key is needed, set its value in the **Linux/WSL process environment** before starting the CLI or dashboard:
 
 ```bash
-read -rsp 'Cloud API key: ' ARL_MODEL_API_KEY; echo
+read -rsp 'Model API key: ' ARL_MODEL_API_KEY; echo
 export ARL_MODEL_API_KEY
 ```
 
-Only the environment variable's name goes in the brief. Do not put the key value in source code, manifests, or the browser form. Credentialed requests require HTTPS; redirects and hidden retries are disabled. A missing configured credential blocks immediately, before model requests or execution.
+Only the environment variable's name goes in the brief. Do not put the key value in source code, manifests, or the browser form. Credentialed HTTP-provider requests require HTTPS; the keyless Spark HTTP endpoint cannot accept a bearer credential. Redirects and hidden inference retries are disabled. Missing configured credentials block before requests or execution.
 
-Save a brief such as this as `brief.json`, replacing `CLOUD_MODEL_ID` with your provider's model ID and choosing your own question and limits:
+### Submit the brief
+
+Save a brief such as this as `brief.json`, replacing `CODEX_MODEL_ID` with an ID from your account's catalog and choosing your own question and limits:
 
 ```json
 {
   "goal": "How do summation order and precision affect error on cancellation-heavy inputs?",
   "scope": "Controlled synthetic inputs only. Use the supplied standard-library runtime without installing packages.",
   "model": {
-    "base_url": "https://api.openai.com/v1",
-    "model": "CLOUD_MODEL_ID",
-    "api_key_env": "ARL_MODEL_API_KEY"
+    "provider": "openai-codex",
+    "model": "CODEX_MODEL_ID"
   },
   "policy": "candidate_comparison",
   "max_experiments": 2,
   "max_model_calls": 12,
-  "max_output_tokens_per_call": 8192,
+  "max_output_tokens_per_call": null,
   "max_wall_seconds": 600,
   "max_repairs": 1,
   "resources": {"gpu": true, "wall_seconds": 120}
@@ -142,15 +173,15 @@ Accounting retains call counts, known provider token usage, execution attempts, 
 
 ## Browser interface
 
-After configuring the runner and exporting the cloud credential in the same shell:
+After configuring the runner, launch the dashboard. Codex sign-in can happen in the browser; only environment-based API credentials must be exported before server startup.
 
 ```sh
 .venv-linux/bin/arl serve --host 127.0.0.1 --port 8767
 ```
 
-Open <http://127.0.0.1:8767/>. The dashboard uses the same records and coordinator as the CLI. It supports brief submission, initial start, pause/resume/stop, question and decision history, sources, model request/response inspection, saved code and settings, measurements, logs, artifact downloads, and reports.
+Open <http://127.0.0.1:8767/>. Select a provider, sign in if using Codex, and use **Discover models** to load that provider's actual catalog. Provider changes affect the draft, not existing programs. The dashboard uses the same records and coordinator as the CLI. It supports brief submission, initial start, pause/resume/stop, question and decision history, sources, model request/response inspection, saved code and settings, measurements, logs, artifact downloads, and reports.
 
-The server is loopback-only, with origin/host checks and a per-server request token. It is not a public or multi-user service. If you add a previously missing credential, restart the server from the environment containing it before resuming the blocked program.
+The server is loopback-only, with origin/host checks and a per-server request token. It is not a public or multi-user service. After adding an environment-based API credential, restart the server from that environment before resuming the blocked program. Codex sign-in does not require a server restart.
 
 ## Controlled evaluation
 

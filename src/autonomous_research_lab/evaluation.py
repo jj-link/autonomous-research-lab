@@ -8,6 +8,7 @@ import random
 
 from .execution import atomic_json
 from .models import LabError, read_json
+from .model_client import validate_model_config
 from .research import POLICIES, ResearchEngine, new_id
 from .store import Store, identifier, utc_now
 
@@ -133,10 +134,12 @@ def score_observations(observations, truth):
 def prepare(store: Store, model_config, task, policy="candidate_comparison", seed=1729):
     if policy not in POLICIES:
         raise LabError("Unknown comparison policy")
+    model_config = validate_model_config(model_config)
     data, truth = dataset(task, seed)
     program = ResearchEngine(store).create({"goal": GOAL, "scope": "Bounded observational analysis and prediction using the supplied CSV files; standard-library Python only.",
         "model": model_config, "data_files": data, "policy": policy, "max_experiments": 2, "max_model_calls": 12,
-        "max_output_tokens_per_call": 8192, "max_wall_seconds": 120, "max_repairs": 1,
+        "max_output_tokens_per_call": None if model_config["provider"] == "openai-codex" else 8192,
+        "max_wall_seconds": 120, "max_repairs": 1,
         "resources": {"gpu": False, "wall_seconds": 30, "memory_bytes": 128 * 1024**2, "output_bytes": 8 * 1024**2, "log_bytes": 1024**2, "pids": 32, "cpus": None}})
     evaluation_id = new_id("eval")
     record = {"id": evaluation_id, "program_id": program["id"], "task": task, "policy": policy, "seed": seed, "created_at": utc_now()}

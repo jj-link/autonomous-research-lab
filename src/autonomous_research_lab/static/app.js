@@ -61,9 +61,91 @@ async function select(kind, id) {
   await renderDetail(kind);
   $(kind.slice(0, -1) + "-detail").scrollIntoView({block: "start", behavior: "smooth"});
 }
+function modelConfig(catalog = false) {
+  const provider = $("brief-provider").value;
+  const config = {provider};
+  if (!catalog) config.model = $("brief-model-name").value.trim();
+  if (provider !== "openai-codex") {
+    config.base_url = $("brief-model-url").value.trim();
+    config.api_key_env = $("brief-model-key-env").value.trim() || null;
+  }
+  return config;
+}
+function changeProvider() {
+  const provider = $("brief-provider").value;
+  const codex = provider === "openai-codex";
+  $("codex-account").classList.toggle("hidden", !codex);
+  $("model-url-field").classList.toggle("hidden", codex);
+  $("model-key-field").classList.toggle("hidden", codex);
+  $("brief-model-url").disabled = codex;
+  $("brief-model-url").required = !codex;
+  $("brief-model-key-env").disabled = codex;
+  $("brief-model-url").value = provider === "spark" ? (state.overview?.providers.spark_base_url || "") : provider === "openai-compatible" ? "https://api.openai.com/v1" : "";
+  $("brief-model-key-env").value = "";
+  $("brief-model-name").value = "";
+  $("provider-models").replaceChildren();
+  $("model-discovery-status").textContent = "";
+  $("brief-tokens").disabled = codex;
+  $("brief-tokens").value = codex ? "" : "8192";
+  $("brief-tokens").placeholder = codex ? "Provider-managed" : "";
+  $("model-token-note").textContent = codex ? "Codex manages output length. Call limits and request timeouts still apply; no numeric output-token cap is claimed." : "Sent as the selected server's requested output-token limit.";
+}
+function renderProviderStatus(status) {
+  $("codex-status").textContent = status.pending ? "Waiting for ChatGPT sign-in…" : status.error || (status.connected ? "Codex account connected." : "Not connected. Sign in with your existing ChatGPT account.");
+  $("codex-login").disabled = status.pending;
+  $("codex-cancel").classList.toggle("hidden", !status.pending);
+  $("codex-logout").classList.toggle("hidden", !status.connected);
+  if (!status.pending) {
+    $("codex-continue").classList.add("hidden");
+    $("codex-continue").removeAttribute("href");
+  }
+}
+for (const [id, action] of [["codex-login", "login"], ["codex-cancel", "cancel"], ["codex-logout", "logout"]]) {
+  $(id).addEventListener("click", async () => {
+    $(id).disabled = true;
+    error("");
+    try {
+      const response = await api("/api/providers/codex/" + action, {});
+      if (action === "login") {
+        const url = new URL(response.authorization_url);
+        if (url.origin !== "https://auth.openai.com") throw new Error("Unexpected Codex authorization destination.");
+        $("codex-continue").href = url.href;
+        $("codex-continue").classList.remove("hidden");
+      }
+      await refresh();
+    } catch (exception) { error(exception.message); }
+    finally { $(id).disabled = id === "codex-login" && Boolean(state.overview?.providers.codex.pending); }
+  });
+}
+$("brief-provider").addEventListener("change", changeProvider);
+for (const id of ["brief-model-url", "brief-model-key-env"]) {
+  $(id).addEventListener("input", () => {
+    $("provider-models").replaceChildren();
+    $("brief-model-name").value = "";
+    $("model-discovery-status").textContent = "Connection changed; choose a model for this connection.";
+  });
+}
+$("model-discover").addEventListener("click", async () => {
+  $("model-discover").disabled = true;
+  error("");
+  const requested = JSON.stringify(modelConfig(true));
+  try {
+    const result = await api("/api/providers/models", JSON.parse(requested));
+    if (JSON.stringify(modelConfig(true)) !== requested) return;
+    $("provider-models").replaceChildren(...result.models.map(id => {
+      const option = node("option");
+      option.value = id;
+      return option;
+    }));
+    $("model-discovery-status").textContent = result.models.length ? "Catalog loaded. Choose an advertised model in the model field." : "This provider advertised no models.";
+  } catch (exception) { error(exception.message); }
+  finally { $("model-discover").disabled = false; }
+});
+changeProvider();
 function renderLists() {
   const overview = state.overview;
   const runner = overview.runner;
+  renderProviderStatus(overview.providers.codex);
   const allocation = runner.gpu_uuid ? `GPU ${runner.gpu_uuid}` : "No GPU configured";
   $("runner-status").textContent = runner.configured ? `${runner.image} · ${allocation}` : runner.detail;
   for (const kind of ["programs", "experiments", "attempts"]) {
@@ -252,9 +334,9 @@ $("brief-form").addEventListener("submit", async (event) => {
     const brief = {
       goal: $("brief-goal").value.trim(), scope: $("brief-scope").value.trim(),
       sources: $("brief-sources").value.split("\n").map((item) => item.trim()).filter(Boolean), data_files: data,
-      model: {base_url: $("brief-model-url").value.trim(), model: $("brief-model-name").value.trim(), api_key_env: $("brief-model-key-env").value.trim() || null},
+      model: modelConfig(),
       policy: $("brief-policy").value, max_experiments: number("brief-max-experiments", 2), max_model_calls: number("brief-max-calls", 12),
-      max_output_tokens_per_call: number("brief-tokens"), max_wall_seconds: number("brief-max-wall", 600), max_repairs: number("brief-repairs"),
+      max_output_tokens_per_call: $("brief-provider").value === "openai-codex" ? null : number("brief-tokens"), max_wall_seconds: number("brief-max-wall", 600), max_repairs: number("brief-repairs"),
       resources: {gpu: $("brief-gpu").checked, wall_seconds: number("brief-run-wall"), memory_bytes: number("brief-memory") * 1024 ** 2,
         output_bytes: number("brief-output") * 1024 ** 2, log_bytes: number("brief-log") * 1024 ** 2, pids: number("brief-pids"), cpus: number("brief-cpus", null)}
     };
@@ -274,7 +356,7 @@ function closeReport() { $("report-dialog").classList.add("hidden"); $("tab-prog
 $("report-close").addEventListener("click", closeReport);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeReport(); });
 async function poll() {
-  try { if (!state.overview || !document.hidden) await refresh(); } catch (exception) { error(exception.message); }
+  try { if (!state.overview || !document.hidden || state.overview.providers.codex.pending) await refresh(); } catch (exception) { error(exception.message); }
   setTimeout(poll, 3000);
 }
 poll();

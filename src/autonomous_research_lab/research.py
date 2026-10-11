@@ -13,6 +13,7 @@ import threading
 import uuid
 
 from . import execution, prompts
+from .codex_auth import CodexAuth
 from .model_client import ModelClient, ModelError, validate_model_config
 from .models import LabError, Limits, ExperimentSpec, TERMINAL_STATES, canonical_json, positive_int, read_json, relative_path, require_keys
 from .sources import SourceTools
@@ -67,11 +68,20 @@ def validate_brief(value):
     if brief["policy"] not in POLICIES:
         raise LabError("Unknown research policy")
     for key, default, low, high in (("max_experiments", 2, 1, 20), ("max_model_calls", 12, 1, 100),
-                                    ("max_output_tokens_per_call", 8192, 128, 32768), ("max_wall_seconds", 600, 1, 86400), ("max_repairs", 1, 0, 3)):
+                                    ("max_wall_seconds", 600, 1, 86400), ("max_repairs", 1, 0, 3)):
         count = positive_int(value.get(key, default), key, low)
         if count > high:
             raise LabError(f"{key} must be <= {high}")
         brief[key] = count
+    if brief["model"]["provider"] == "openai-codex":
+        if value.get("max_output_tokens_per_call") is not None:
+            raise LabError("Codex manages output-token limits; max_output_tokens_per_call must be omitted or null")
+        brief["max_output_tokens_per_call"] = None
+    else:
+        tokens = positive_int(value.get("max_output_tokens_per_call", 8192), "max_output_tokens_per_call", 128)
+        if tokens > 32768:
+            raise LabError("max_output_tokens_per_call must be <= 32768")
+        brief["max_output_tokens_per_call"] = tokens
     data = value.get("data_files", {})
     if not isinstance(data, dict) or len(data) > 16:
         raise LabError("data_files must map at most 16 relative names to UTF-8 text")
@@ -97,6 +107,7 @@ class SchedulingInterrupted(LabError):
 class ResearchEngine:
     def __init__(self, store: Store):
         self.store = store
+        self.auth = CodexAuth(store.root)
         self.path = store.root / "research.sqlite"
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -166,8 +177,8 @@ class ResearchEngine:
 
     def _preflight(self, program):
         config = program["brief"]["model"]
-        if not program["active_attempt_id"] and config.get("api_key_env") and not os.environ.get(config["api_key_env"]):
-            raise LabError(f"Cloud API credential variable {config['api_key_env']} is not set in the coordinator environment")
+        if not program["active_attempt_id"]:
+            ModelClient(config, auth=self.auth).check_auth()
         resources = program["brief"]["resources"]
         spec = ExperimentSpec.from_dict({"name": "preflight", "source": "code", "entrypoint": "main.py", "gpu": resources["gpu"],
                                         "limits": {k: resources[k] for k in Limits.__dataclass_fields__}}, self.folder(program["id"]))
@@ -318,7 +329,7 @@ class ResearchEngine:
         path = self.folder(program_id) / "calls" / (call_id + ".json")
         execution.atomic_json(path.with_suffix(".request.json"), {"messages": messages, "model": program["brief"]["model"], "max_tokens": program["brief"]["max_output_tokens_per_call"]})
         try:
-            response = ModelClient(program["brief"]["model"]).complete(messages, program["brief"]["max_output_tokens_per_call"])
+            response = ModelClient(program["brief"]["model"], auth=self.auth).complete(messages, program["brief"]["max_output_tokens_per_call"])
             record = {"status": "completed", "response": response}
         except ModelError as exc:
             record = {"status": "failed", "error": str(exc), "response": exc.record}

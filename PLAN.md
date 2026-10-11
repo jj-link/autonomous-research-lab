@@ -290,7 +290,7 @@ The budget includes:
 
 The system does not obtain a free reset by declaring an attempt unsuccessful.
 
-Execution time can be enforced by the worker. Model calls need configured output limits and usage accounting. If a provider cannot supply dependable billing information, the system must distinguish an estimated monetary total from an enforceable call or token limit.
+Execution time can be enforced by the worker. Model calls need enforceable call budgets, request timeouts, usage accounting, and output-token limits where the provider supports them. Codex's output limit is provider-managed and recorded as `null`, not as a numeric cap the app cannot enforce. If a provider cannot supply dependable billing information, the system must distinguish an estimated monetary total from an enforceable call or token limit.
 
 ### Failure handling
 
@@ -429,7 +429,7 @@ The verified GPU path keeps the container root and WSL driver mounts read-only. 
 
 Implemented durable source retrieval, director/selector/builder/analyst contracts, evidence references, question ancestry and status history, candidate rejection/selection, bounded repairs, adaptive follow-ups, and reports. The coordinator—not a model—owns execution permissions and budgets. Earlier execution records can be retrieved with their measurements and bounded console output; repairs receive the original proposal and actual failure record.
 
-Model requests and responses are retained separately. Calls are reserved before transmission, uncertain interrupted requests are not silently replayed, and missing provider usage is marked unknown. Recovery can consume an already-saved response without buying another call. Missing configured cloud credentials block before requests or execution; there is no automatic local-model fallback.
+Model requests and responses are retained separately. Calls are reserved before transmission, uncertain interrupted requests are not silently replayed, and missing provider usage is marked unknown. Recovery can consume an already-saved response without buying another call. Missing configured credentials block before requests or execution; there is no automatic provider fallback.
 
 An end-to-end **protocol smoke, not a language-model research run**, used deterministic HTTP responses with real public HTTPS retrieval and the real Podman worker. It recorded an intentional runtime failure, supplied the failure and original code to a repair, measured left-to-right floating-point accumulation against `math.fsum`, retrieved the earlier measurement, updated the answered question, and ran a result-linked follow-up. The two successful measurements had absolute discrepancies of 10 and 100 for 10 and 100 cancellation triples respectively. The scripted analyses preserved `execution_failed`, then two `contradicted` outcomes instead of conflating execution and scientific status.
 
@@ -453,6 +453,18 @@ Real Chromium inspection covered the saved RTX reduction results, code/settings,
 
 Screenshots were inspected. Browser automation's native input helpers were inert in this environment, so control actions used DOM events in the real page; physical pointer/keyboard delivery was not verified. Initial background-page loading and stale tab/history refreshes were corrected during this inspection.
 
-The remaining prerequisite is a configured cloud endpoint/model and application API credential in the Linux/WSL coordinator environment. Until then, the autonomous research demonstration in section 9 and live matched-policy comparisons remain blocked, not completed. No local language model is used to fill that gap.
+A live autonomous research demonstration and matched-policy comparisons have not yet been run. The Codex path requires this app's independent account sign-in and a selected account-advertised model; it does not require an API key. Spark is available as an explicit option, not an automatic substitute for that demonstration.
 
 Final integrated check: all 102 tests passed on Python 3.10 in Linux/WSL with `ARL_TEST_IMAGE=localhost/arl-runtime:0.1` and `ResourceWarning` promoted to an error. This included real container boundary, resource-limit, stop, and recovery scenarios alongside model/source contracts, durable-record invariants, numerical scoring, and web request/artifact security. The installed `arl evaluate --list` command also returned all five tasks and all three policies.
+
+### Explicit Codex-account and Spark providers
+
+Added provider selection to briefs, CLI discovery, and the dashboard: ChatGPT OAuth for Codex, the optional Spark cluster, and configurable OpenAI-compatible APIs. The Codex endpoint is fixed, no host tools are exposed, numeric output-token caps are rejected, and incomplete streams retain public partial evidence and available usage without becoming successful answers.
+
+Sign-in uses single-use PKCE state and a loopback callback. Cancel, expiry, server close, and another controller's logout prevent late login persistence. Credentials are separate from other applications; Windows/WSL uses CurrentUser DPAPI, other platforms require a supported native keyring. Platform/store-scoped process locking covers refresh and atomic replacement. No plaintext fallback is provided.
+
+Verification: all 122 tests passed in Linux/WSL with `ResourceWarning` treated as an error, including real Podman boundary/recovery checks, real DPAPI encryption and cross-store decryption rejection, and separate-process refresh serialization. The process-lock check also passed after changing its fixture manager to use a loopback TCP socket rather than an implicit temporary socket directory.
+
+The installed CLI discovered `GLM-5.3-Flash-EXL3` on `http://100.92.139.82:8888/v1`. One real Spark completion returned `{"answer":42}` for `6 × 7`, with reported usage of 38 input and 45 output tokens. This is transport proof, not scientific evaluation. A loopback HTTP fixture separately exercised Codex's actual streaming client; **live Codex inference remains untested pending account sign-in**.
+
+Real Chromium checks covered Spark discovery, explicit provider persistence in draft briefs, Codex's disabled endpoint/token-cap fields, protected sign-in startup and cancellation, and a Codex draft with a `null` output limit and no endpoint override. The screenshot was inspected and no browser errors were reported. Actions used DOM events because native input helpers were previously inert; physical input delivery remains unverified. Proof stores and scripts were removed without changing the existing GPU-study records.
