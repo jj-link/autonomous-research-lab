@@ -25,6 +25,17 @@
     <button type="button" class="tab" data-tab="experiments" id="tab-experiments-btn" aria-pressed="false"><span class="nav-index" aria-hidden="true">02</span><span>Experiments</span><span class="nav-count" id="experiments-count" aria-hidden="true">—</span></button>
     <button type="button" class="tab" data-tab="attempts" id="tab-attempts-btn" aria-pressed="false"><span class="nav-index" aria-hidden="true">03</span><span>Run history</span><span class="nav-count" id="attempts-count" aria-hidden="true">—</span></button>
   </nav>
+  <section id="codex-account" aria-label="Codex account">
+    <strong>Codex account</strong>
+    <p id="codex-status" class="hint" aria-live="polite">Checking sign-in…</p>
+    <div class="actions">
+      <button type="button" id="codex-login">Sign in with ChatGPT</button>
+      <button type="button" id="codex-cancel" class="ghost hidden">Cancel sign-in</button>
+      <button type="button" id="codex-logout" class="ghost hidden">Disconnect Codex</button>
+      <a id="codex-continue" class="hidden" target="_blank" rel="noopener noreferrer">Continue to ChatGPT</a>
+    </div>
+    <p class="hint">Use your ChatGPT account. No API key required.</p>
+  </section>
   <details class="runner-panel" open>
     <summary>Execution environment</summary>
     <p id="runner-label" class="runner-label">Checking configuration</p>
@@ -75,17 +86,6 @@
           </select>
           <p class="hint">Used for all research roles in this program. Provider changes apply to this draft only; failures never switch providers.</p>
         </div>
-        <section id="codex-account" class="field span-2">
-          <strong>Codex account</strong>
-          <p id="codex-status" class="hint" aria-live="polite">Checking sign-in…</p>
-          <div class="actions">
-            <button type="button" id="codex-login">Sign in with ChatGPT</button>
-            <button type="button" id="codex-cancel" class="ghost hidden">Cancel sign-in</button>
-            <button type="button" id="codex-logout" class="ghost hidden">Disconnect Codex</button>
-            <a id="codex-continue" class="hidden" target="_blank" rel="noopener noreferrer">Continue to ChatGPT</a>
-          </div>
-          <p class="hint">No API key required. This app keeps a separate protected session; it does not reuse another project's credentials.</p>
-        </section>
         <div class="field" id="model-url-field">
           <label for="brief-model-url">Model endpoint</label>
           <input id="brief-model-url" name="model_base_url" type="url" required spellcheck="false"

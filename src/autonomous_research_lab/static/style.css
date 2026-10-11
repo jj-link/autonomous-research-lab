@@ -41,7 +41,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .tab { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 8px; width: 100%; padding: 13px 12px; text-align: left; font-size: 12px; border-radius: 5px; background: transparent; color: var(--sidebar-muted); border: 1px solid transparent; }
 .tab:hover { background: #ffffff08; color: var(--sidebar-ink); }
 .tab.active { color: var(--sidebar-ink); background: #ffffff0c; border-color: var(--sidebar-line); box-shadow: inset 2px 0 #d8bd86; }
-.sidebar button:focus-visible, .sidebar summary:focus-visible { outline-color: #d8bd86; }
+.sidebar button:focus-visible, .sidebar summary:focus-visible, .sidebar a:focus-visible { outline-color: #d8bd86; }
 .nav-index { font: 10px var(--mono); opacity: .6; }
 .nav-count { font: 10px var(--mono); min-width: 20px; text-align: center; padding: 3px 4px; border-radius: 3px; background: #ffffff08; }
 .runner-panel { margin: auto 8px 0; padding-top: 42px; }
@@ -117,9 +117,14 @@ input[type=checkbox] { width: 17px; height: 17px; margin: 0; accent-color: var(-
 input[type=file] { padding: 8px; }
 input::file-selector-button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 3px; padding: 6px 10px; margin-right: 10px; font: inherit; cursor: pointer; }
 .required { font-size: 11px; font-weight: 400; color: var(--muted); }
-#codex-account { background: var(--accent-soft); border: 1px solid var(--line); border-radius: 5px; padding: 18px 20px; gap: 6px; }
-#codex-account strong { font-size: 13px; }
-#codex-account .actions { margin: 7px 0; }
+#codex-account { display: grid; gap: 7px; margin: 24px 8px 0; padding: 16px; background: #ffffff06; border: 1px solid var(--sidebar-line); border-radius: 5px; flex-shrink: 0; }
+#codex-account strong { font-size: 13px; color: var(--sidebar-ink); }
+#codex-account .hint { color: var(--sidebar-muted); font-size: 11px; overflow-wrap: anywhere; }
+#codex-account .actions { display: grid; gap: 8px; margin: 3px 0; }
+#codex-account button { width: 100%; min-height: 42px; padding: 10px 12px; font-size: 11px; }
+#codex-login { background: #d8bd86; color: #192e28; }
+#codex-account button.ghost { background: transparent; color: var(--sidebar-ink); border-color: var(--sidebar-line); }
+#codex-continue { color: #d8bd86; font-size: 12px; font-weight: 600; }
 #model-discover { align-self: flex-start; padding: 6px 10px; font-size: 11px; }
 .advanced { border-top: 1px solid var(--line); padding-top: 18px; }
 .advanced > .hint { margin-top: 16px; }
@@ -202,6 +207,7 @@ small { display: block; overflow-wrap: anywhere; color: var(--muted); }
   .tab { grid-template-columns: 1fr auto; gap: 6px; padding: 10px 8px; font-size: 11px; }
   .nav-count { font-size: 9px; min-width: 16px; padding: 2px; }
   .runner-panel { margin: 18px 0 0; padding: 14px 0 0; border-top: 1px solid var(--sidebar-line); }
+  #codex-account { margin: 18px 0 0; }
   .runner-panel[open] > summary { margin-bottom: 10px; }
   .runner-label { font-size: 11px; }
   .runner-status { font-size: 10px; }

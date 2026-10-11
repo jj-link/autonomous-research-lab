@@ -98,7 +98,6 @@ function modelConfig(catalog = false) {
 function changeProvider() {
   const provider = $("brief-provider").value;
   const codex = provider === "openai-codex";
-  $("codex-account").classList.toggle("hidden", !codex);
   $("model-url-field").classList.toggle("hidden", codex);
   $("model-key-field").classList.toggle("hidden", codex);
   $("brief-model-url").disabled = codex;
@@ -115,7 +114,7 @@ function changeProvider() {
   $("model-token-note").textContent = codex ? "Codex manages output length. Call limits and request timeouts still apply; no numeric output-token cap is claimed." : "Sent as the selected server's requested output-token limit.";
 }
 function renderProviderStatus(status) {
-  $("codex-status").textContent = status.pending ? "Waiting for ChatGPT sign-in…" : status.error || (status.connected ? "Codex account connected." : "Not connected. Sign in with your existing ChatGPT account.");
+  $("codex-status").textContent = status.pending ? "Waiting for ChatGPT sign-in…" : status.error || (status.connected ? "Codex account connected." : "Not connected.");
   $("codex-login").disabled = status.pending;
   $("codex-cancel").classList.toggle("hidden", !status.pending);
   $("codex-logout").classList.toggle("hidden", !status.connected);
