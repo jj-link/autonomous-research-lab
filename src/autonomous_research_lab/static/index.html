@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="arl-token" content="__ARL_SERVER_TOKEN__">
+<title>Autonomous Research Lab</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="app-title">
+    <h1>Autonomous Research Lab</h1>
+    <p class="subtle">Local dashboard for recorded research programs. Loopback only.</p>
+  </div>
+  <div id="runner-status" class="runner-status" aria-live="polite">Loading runner status&hellip;</div>
+</header>
+
+<nav class="tabs" aria-label="Sections">
+  <button type="button" class="tab active" data-tab="programs" id="tab-programs-btn">Research programs</button>
+  <button type="button" class="tab" data-tab="experiments" id="tab-experiments-btn">Experiments</button>
+  <button type="button" class="tab" data-tab="attempts" id="tab-attempts-btn">Run history</button>
+</nav>
+
+<main>
+  <p id="global-error" class="banner error hidden" role="alert"></p>
+  <p id="global-note" class="banner subtle hidden" aria-live="polite"></p>
+
+  <section id="tab-programs" class="tab-panel" aria-labelledby="tab-programs-btn">
+    <details class="card" id="brief-card" open>
+      <summary>Submit a research brief</summary>
+      <form id="brief-form" class="grid-form" novalidate>
+        <div class="field span-2">
+          <label for="brief-goal">Research goal <span class="required">(required)</span></label>
+          <textarea id="brief-goal" name="goal" rows="3" required
+            placeholder="What question should the lab investigate?"></textarea>
+        </div>
+        <div class="field span-2">
+          <label for="brief-scope">Scope <span class="subtle">(optional)</span></label>
+          <input id="brief-scope" name="scope" type="text" autocomplete="off"
+            placeholder="What kinds of work are permitted?">
+        </div>
+        <div class="field">
+          <label for="brief-model-url">Model endpoint</label>
+          <input id="brief-model-url" name="model_base_url" type="url" required spellcheck="false"
+            placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="field">
+          <label for="brief-model-name">Model name</label>
+          <input id="brief-model-name" name="model" type="text" required autocomplete="off"
+            placeholder="Cloud model ID">
+        </div>
+        <div class="field">
+          <label for="brief-model-key-env">API key environment variable <span class="subtle">(optional)</span></label>
+          <input id="brief-model-key-env" name="api_key_env" type="text" autocomplete="off" spellcheck="false"
+            placeholder="ARL_MODEL_API_KEY">
+          <p class="hint">Variable name only. The key value is set in the server environment and is never entered or stored here.</p>
+        </div>
+        <div class="field">
+          <label for="brief-max-experiments">Max experiments (1&ndash;20)</label>
+          <input id="brief-max-experiments" name="max_experiments" type="number" inputmode="numeric"
+            min="1" max="20" step="1" placeholder="2">
+        </div>
+        <div class="field">
+          <label for="brief-max-calls">Max model calls (1&ndash;100)</label>
+          <input id="brief-max-calls" name="max_model_calls" type="number" inputmode="numeric"
+            min="1" max="100" step="1" placeholder="12">
+        </div>
+        <div class="field">
+          <label for="brief-max-wall">Total execution time budget (seconds)</label>
+          <input id="brief-max-wall" name="max_wall_seconds" type="number" inputmode="numeric"
+            min="1" step="1" placeholder="600">
+        </div>
+        <div class="field checkbox-field">
+          <input id="brief-gpu" name="gpu" type="checkbox">
+          <label for="brief-gpu">Permit GPU execution</label>
+        </div>
+        <details class="span-2 advanced">
+          <summary>Sources and resource limits</summary>
+          <div class="grid-form">
+            <div class="field span-2"><label for="brief-sources">Source URLs (public HTTPS, one per line)</label><textarea id="brief-sources" rows="2"></textarea></div>
+            <div class="field span-2"><label for="brief-data">Approved text or CSV data (256 KiB total)</label><input id="brief-data" type="file" multiple></div>
+            <div class="field"><label for="brief-policy">Research policy</label><select id="brief-policy"><option value="candidate_comparison">Compare candidate experiments</option><option value="direct">Choose one follow-up directly</option><option value="fixed_plan">Commit to an initial fixed plan</option></select></div>
+            <div class="field"><label for="brief-tokens">Output tokens per model call</label><input id="brief-tokens" type="number" min="128" max="32768" value="8192"></div>
+            <div class="field"><label for="brief-memory">Host memory per experiment (MiB)</label><input id="brief-memory" type="number" min="16" value="2048"></div>
+            <div class="field"><label for="brief-run-wall">Time per experiment (seconds)</label><input id="brief-run-wall" type="number" min="1" value="120"></div>
+            <div class="field"><label for="brief-output">Output storage per experiment (MiB)</label><input id="brief-output" type="number" min="1" value="64"></div>
+            <div class="field"><label for="brief-log">Log storage per experiment (MiB)</label><input id="brief-log" type="number" min="1" value="8"></div>
+            <div class="field"><label for="brief-pids">Process limit per experiment</label><input id="brief-pids" type="number" min="1" value="64"></div>
+            <div class="field"><label for="brief-cpus">CPU quota (blank means no quota)</label><input id="brief-cpus" type="number" min="0.1" step="0.1"></div>
+            <div class="field"><label for="brief-repairs">Repairs allowed per design</label><input id="brief-repairs" type="number" min="0" max="3" value="1"></div>
+          </div>
+          <p class="hint">Memory is host RAM, not a GPU-memory cap. Pause lets active work finish; stop requests termination. Unsupported limits fail rather than changing host settings.</p>
+        </details>
+        <div class="span-2 form-actions">
+          <button type="submit" id="brief-submit">Create research program</button>
+          <span id="brief-status" class="hint" aria-live="polite"></span>
+        </div>
+      </form>
+    </details>
+    <div id="program-detail" class="stack"></div>
+    <div id="programs-list" class="stack"></div>
+  </section>
+
+  <section id="tab-experiments" class="tab-panel hidden" aria-labelledby="tab-experiments-btn">
+    <div id="experiment-detail" class="stack"></div>
+    <div id="experiments-list" class="stack"></div>
+  </section>
+
+  <section id="tab-attempts" class="tab-panel hidden" aria-labelledby="tab-attempts-btn">
+    <div id="attempt-detail" class="stack"></div>
+    <div id="attempts-list" class="stack"></div>
+  </section>
+</main>
+
+<div id="report-dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="report-title">
+  <div class="dialog-panel">
+    <div class="dialog-head">
+      <h2 id="report-title">Research report</h2>
+      <button type="button" id="report-close" class="ghost">Close</button>
+    </div>
+    <div id="report-body" class="report markdown"></div>
+  </div>
+</div>
+
+<footer class="app-footer">
+  <p class="subtle">Execution status and scientific outcome are reported separately and exactly as recorded;
+  a completed run is not automatically a scientific success.</p>
+</footer>
+
+<noscript><p class="banner error">This dashboard requires JavaScript.</p></noscript>
+<script src="/app.js"></script>
+</body>
+</html>

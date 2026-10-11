@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sys
 
-from .models import LabError, load_manifest
+from .models import LabError, load_manifest, read_json
 from .store import Store
 
 
@@ -39,6 +39,29 @@ def main(argv=None):
     recovery.add_argument("--wait", action="store_true")
     logs = commands.add_parser("logs", help="Read the last 64 KiB of a container log")
     logs.add_argument("id")
+    programs = commands.add_parser("program", help="Create and control a persistent research program")
+    program_commands = programs.add_subparsers(dest="program_command", required=True)
+    create = program_commands.add_parser("create")
+    create.add_argument("brief", type=Path)
+    program_commands.add_parser("list")
+    program_commands.add_parser("recover")
+    for name in ("show", "start", "pause", "resume", "stop", "report"):
+        command = program_commands.add_parser(name)
+        command.add_argument("id")
+        if name in {"start", "resume"}:
+            command.add_argument("--wait", action="store_true")
+    web = commands.add_parser("serve", help="Run the loopback browser interface")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8765)
+    evaluation = commands.add_parser("evaluate", help="Prepare/run controlled research or score an existing evaluation")
+    evaluation.add_argument("--list", action="store_true")
+    evaluation.add_argument("--model-config", type=Path)
+    evaluation.add_argument("--task", choices=("genuine", "confounded", "absent", "insufficient", "conditional"))
+    evaluation.add_argument("--policy", choices=("fixed_plan", "direct", "candidate_comparison"), default="candidate_comparison")
+    evaluation.add_argument("--seed", type=int, default=1729)
+    evaluation.add_argument("--prepare-only", action="store_true")
+    evaluation.add_argument("--compare", action="store_true")
+    evaluation.add_argument("--score", metavar="EVALUATION_ID")
     args = parser.parse_args(argv)
     try:
         store = Store(args.root)
@@ -57,6 +80,49 @@ def main(argv=None):
             value = store.events(args.id)
         elif args.command == "result":
             value = store.get_attempt(args.id)["result"]
+        elif args.command == "program":
+            from .research import ResearchEngine
+            engine = ResearchEngine(store)
+            action = args.program_command
+            if action == "create":
+                value = engine.create(read_json(args.brief))
+            elif action == "list":
+                value = engine.list()
+            elif action == "recover":
+                value = engine.recover()
+            elif action == "show":
+                value = engine.get(args.id)
+            elif action == "report":
+                print(engine.report(args.id))
+                return 0
+            elif action in {"start", "resume"}:
+                value = getattr(engine, action)(args.id, background=not args.wait)
+                exit_code = int(value["state"] in {"blocked", "failed"})
+            else:
+                value = getattr(engine, action)(args.id)
+        elif args.command == "serve":
+            from .web import serve
+            serve(store, args.host, args.port)
+            return 0
+        elif args.command == "evaluate":
+            from . import evaluation
+            if args.list:
+                value = {"tasks": evaluation.TASKS, "policies": sorted(evaluation.POLICIES)}
+            elif args.score:
+                value = evaluation.score(store, args.score)
+            else:
+                if args.model_config is None or args.task is None:
+                    raise LabError("Evaluation requires --model-config FILE and --task NAME")
+                if args.compare and args.prepare_only:
+                    raise LabError("Choose --compare or --prepare-only, not both")
+                model = read_json(args.model_config)
+                if args.compare:
+                    value = evaluation.compare(store, model, args.task, args.seed)
+                    exit_code = int(not value["complete_comparison"])
+                else:
+                    function = evaluation.prepare if args.prepare_only else evaluation.evaluate
+                    value = function(store, model, args.task, args.policy, args.seed)
+                    exit_code = int(not args.prepare_only and value["numerical"] is None)
         else:
             from . import execution
             if args.command == "configure":

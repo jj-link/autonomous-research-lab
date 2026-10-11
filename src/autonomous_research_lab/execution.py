@@ -330,8 +330,11 @@ def finish(store: Store, attempt: dict, spec: ExperimentSpec, container: dict | 
     if state is None:
         if state_info.get("OOMKilled"):
             state, error = "limit_exceeded", "Container exceeded its memory allocation"
-        elif elapsed is not None and elapsed >= spec.limits.wall_seconds - 0.05 and code != 0:
-            state, error = "timed_out", "Container reached its wall-time allocation"
+        elif code == -1 and container and container.get("Config", {}).get("Timeout", 0) > 0:
+            # conmon publishes -1 when its runtime watchdog kills the container.
+            # The runtime timeout can precede the nominal elapsed-time boundary;
+            # timestamps alone can also mislabel ordinary nonzero exits.
+            state, error = "timed_out", "Container runtime watchdog expired (conmon exit -1)"
         elif attempt["stop_requested"]:
             state = "stopped"
         elif code == 0:

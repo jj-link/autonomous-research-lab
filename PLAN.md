@@ -423,4 +423,36 @@ The installed CLI executed both included CUDA studies on `GPU-6ac06ab6-ac30-f3ad
 
 The second study is a completed execution with large numerical error, not a crashed experiment. Its synthetic cancellation-heavy inputs demonstrate sensitivity to summation order; they do not establish general algorithm rankings. CUDA-event intervals can include host submission/scheduling gaps and are not pure kernel or end-to-end application benchmarks. Raw observations, hashes, code snapshots, and logs remain in the local `.arl` store.
 
-The verified GPU path keeps the container root and WSL driver mounts read-only. WSL's shared GPU device is not an adversarial per-adapter isolation boundary. Native CDI execution, agent-designed studies, and autonomous follow-up selection have not yet been demonstrated.
+The verified GPU path keeps the container root and WSL driver mounts read-only. WSL's shared GPU device is not an adversarial per-adapter isolation boundary. Native CDI execution remains untested.
+
+### Bounded research coordination and source/model integration
+
+Implemented durable source retrieval, director/selector/builder/analyst contracts, evidence references, question ancestry and status history, candidate rejection/selection, bounded repairs, adaptive follow-ups, and reports. The coordinator—not a model—owns execution permissions and budgets. Earlier execution records can be retrieved with their measurements and bounded console output; repairs receive the original proposal and actual failure record.
+
+Model requests and responses are retained separately. Calls are reserved before transmission, uncertain interrupted requests are not silently replayed, and missing provider usage is marked unknown. Recovery can consume an already-saved response without buying another call. Missing configured cloud credentials block before requests or execution; there is no automatic local-model fallback.
+
+An end-to-end **protocol smoke, not a language-model research run**, used deterministic HTTP responses with real public HTTPS retrieval and the real Podman worker. It recorded an intentional runtime failure, supplied the failure and original code to a repair, measured left-to-right floating-point accumulation against `math.fsum`, retrieved the earlier measurement, updated the answered question, and ran a result-linked follow-up. The two successful measurements had absolute discrepancies of 10 and 100 for 10 and 100 cancellation triples respectively. The scripted analyses preserved `execution_failed`, then two `contradicted` outcomes instead of conflating execution and scientific status.
+
+The smoke stopped at its three-attempt allowance, retained all three implementation attempts, charged 11 protocol calls as unknown token usage, and charged 0.337783 seconds of measured execution time. It also produced a report separating raw observations from interpretations. These are coordinator/worker checks; the scripted decisions and code do not satisfy the agent-led acceptance conditions in milestones 2–3.
+
+Live HTTPS retrieval and Crossref metadata search were exercised separately. Source records distinguish web text, abstracts, metadata, and truncation. Fetching metadata does not mean a paper's full text was read.
+
+A short-runtime regression exposed a watchdog exit before the nominal elapsed-time boundary. Timeout classification now uses the configured runtime watchdog's explicit conmon exit status rather than guessing from timestamps; the real-container regression passes. See [conmon's timeout handling](https://github.com/containers/conmon/blob/main/src/conmon.c). A JATS heading/text separation regression was also corrected and passed.
+
+### Controlled evaluation
+
+Implemented all five controlled cases, withheld-label separation, independent linear-algebra checks, prediction scoring, and the fixed-plan/direct/candidate-comparison driver. The evaluator reports incomplete final attempts rather than substituting earlier successes. It retains planning, repair, and failed-execution costs; sampled CPU/memory usage and unknown token/runtime usage remain explicit instead of being presented as complete billing.
+
+Preparation and numerical scoring were exercised on all five generated datasets with an explicitly supplied oracle. The rank-deficient case was correctly marked unidentified in both groups. This verifies the evaluator's data/scoring path, **not agent performance**. No cloud-agent policy comparison or claim of policy superiority has been made. Scientific interpretation still needs external review.
+
+### Browser operation and remaining demonstration
+
+Implemented a loopback dashboard over the same store and coordinator: brief creation, initial start, pause/resume/stop, research history, source and model-call inspection, code/settings, execution measurements, logs, verified artifact downloads, and reports.
+
+Real Chromium inspection covered the saved RTX reduction results, code/settings, logs, artifact responses, controller history, request/response records, and a report containing both failed and completed executions. A browser-submitted control brief transitioned from draft to paused, blocked on its deliberately absent cloud credential with zero calls or attempts, then stopped. A separate real workload was launched through the dashboard, observed running, stopped through its control, and inspected with its partial artifact intact.
+
+Screenshots were inspected. Browser automation's native input helpers were inert in this environment, so control actions used DOM events in the real page; physical pointer/keyboard delivery was not verified. Initial background-page loading and stale tab/history refreshes were corrected during this inspection.
+
+The remaining prerequisite is a configured cloud endpoint/model and application API credential in the Linux/WSL coordinator environment. Until then, the autonomous research demonstration in section 9 and live matched-policy comparisons remain blocked, not completed. No local language model is used to fill that gap.
+
+Final integrated check: all 102 tests passed on Python 3.10 in Linux/WSL with `ARL_TEST_IMAGE=localhost/arl-runtime:0.1` and `ResourceWarning` promoted to an error. This included real container boundary, resource-limit, stop, and recovery scenarios alongside model/source contracts, durable-record invariants, numerical scoring, and web request/artifact security. The installed `arl evaluate --list` command also returned all five tasks and all three policies.
