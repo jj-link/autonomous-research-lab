@@ -149,6 +149,13 @@
       "repo_id": "Qwen/Qwen3.8-27B",
       "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
       "role": "Original BF16 weight reference",
+      "staged_input": {
+        "verified_on": "2026-10-12",
+        "worker_local_id": "input_f7a2c1aad0b34e089d908bc45b1d1743",
+        "inventory_sha256": "d18d5f393c0fcbe2ef30b89760ce082a95d92bd2da8d3b40b967413825a050e7",
+        "bytes": 55586126179,
+        "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
+      },
       "metadata_source": "https://huggingface.co/api/models/Qwen/Qwen3.8-27B"
     },
     {
@@ -156,6 +163,13 @@
       "repo_id": "unsloth/Qwen3.8-27B-NVFP4",
       "revision": "f0b7c9e722f5565102fff8481c99e4d86ae099c7",
       "role": "Mixed-precision post-training quantization",
+      "staged_input": {
+        "verified_on": "2026-10-12",
+        "worker_local_id": "input_0b9f6f8701bf487aa96b5ca4cff317c9",
+        "inventory_sha256": "850a6d40a98bc42de04bce630e841b51f5c9afd20682360ac03ec142328386e2",
+        "bytes": 23444515437,
+        "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
+      },
       "metadata_source": "https://huggingface.co/api/models/unsloth/Qwen3.8-27B-NVFP4"
     },
     {
@@ -179,6 +193,13 @@
       "repo_id": "RadixArk/Qwen3.8-27B-NVFP4",
       "revision": "319f741cce68d7914884900c138a1fbb70a42f30",
       "role": "Mixed-precision Model Optimizer post-training quantization, NVFP4 output head",
+      "staged_input": {
+        "verified_on": "2026-10-12",
+        "worker_local_id": "input_4eaf7ae302634dbebca6d802983ce362",
+        "inventory_sha256": "0544d8028ee5249a3e1eb44cfab848221040a55aa35e34bf2d929a44c6d14636",
+        "bytes": 21945300968,
+        "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
+      },
       "metadata_source": "https://huggingface.co/api/models/RadixArk/Qwen3.8-27B-NVFP4"
     },
     {
@@ -186,6 +207,13 @@
       "repo_id": "QUASAR-QAT/Qwen3.8-27B-QUASAR-NVFP4",
       "revision": "d9af17e20644c5b9a6d66dff1d14f349e2e61b05",
       "role": "Quantization-aware training; a released-build comparison, not a pure post-training conversion ablation",
+      "staged_input": {
+        "verified_on": "2026-10-12",
+        "worker_local_id": "input_696bcde26a84450f9625a28fb4d43430",
+        "inventory_sha256": "1de6b2715a639166ce511e2374273fd0ec32201c030bdfaa4f2ba6a63fccc5d7",
+        "bytes": 20582490186,
+        "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
+      },
       "metadata_source": "https://huggingface.co/api/models/QUASAR-QAT/Qwen3.8-27B-QUASAR-NVFP4"
     }
   ],

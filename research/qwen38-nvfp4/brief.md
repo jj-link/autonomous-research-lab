@@ -175,14 +175,13 @@ Every selected prompt fits the 32,768-token context with the full 16,384-token o
 
 ## Launch requirements and completion criteria
 
-The worker now accepts host-approved, read-only large inputs through `inputs` bindings, and `Containerfile.inference` pins the vLLM/PyTorch environment. The input inventory records the built image, package/CUDA versions, staged NVIDIA checkpoint inventory, and successful compatibility attempt. The [runtime setup instructions](../../README.md#pinned-large-model-runtime) cover initial user-mapping preparation and offline execution.
+All five pinned weight snapshots have been downloaded to the verified HDD mount, checked against publisher file hashes, and registered as approved read-only inputs. `inputs.lock.json` records their local IDs, directory-inventory hashes, and byte counts; `.arl/studies/qwen38-nvfp4/staged.json` retains the host receipt. The directory hashes include Hugging Face download metadata and are not parameter-only hashes. This establishes staged inputs, not inference compatibility for every checkpoint. The [runtime setup instructions](../../README.md#pinned-large-model-runtime) cover initial user-mapping preparation and offline execution.
 
 Before submitting the full comparison as a runnable program, the remaining requirements are:
 
 1. Exercise checkpoint inference for all five candidates and a separate isolated grading path on the reserved compatibility items, without inspecting primary results. A package/GPU probe alone does not satisfy this.
 2. Bind only approved checkpoint snapshots and public problem inputs. Keep hidden grading data and credentials outside the model-serving environment; large-input support does not authorize unrestricted experiment networking or model-controlled host paths.
-3. Finish staging the remaining pinned weight snapshots and retain their file-integrity records. Datasets, official scorers, and the frozen task inventory are prepared; metadata or tokenizer checks do not establish downloaded or validated weights.
-4. Runtime-based memory/PID/storage/time reservations and persistent per-request records. No invented CPU quota, silent sample-count reduction, or unrecorded retries. If a budget cannot cover a matched block, stop before beginning that block.
-5. A coordinator brief that carries this protocol and input inventory to the Codex research agents, plus enough execution allowance for the initial comparison and one selected follow-up. The worker's attempt count is not the count of checkpoint candidates.
+3. Runtime-based memory/PID/storage/time reservations and persistent per-request records. No invented CPU quota, silent sample-count reduction, or unrecorded retries. If a budget cannot cover a matched block, stop before beginning that block.
+4. A coordinator brief that carries this protocol and input inventory to the Codex research agents, plus enough execution allowance for the initial comparison and one selected follow-up. The worker's attempt count is not the count of checkpoint candidates.
 
 A completed study contains the immutable input/runtime manifest, per-item outputs and scores, failures and resource observations, uncertainty analysis, and the evidence-linked follow-up decision. Neither mounting the drive, catalog discovery, nor a successful single inference request satisfies that criterion.

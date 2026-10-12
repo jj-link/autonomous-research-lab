@@ -33,7 +33,9 @@ The coordinator has also been exercised with scripted HTTP responses and real is
 
 The [Qwen3.8-27B NVFP4 comparison brief](research/qwen38-nvfp4/brief.md) defines a controlled comparison of four published NVFP4 builds against the original BF16 model: coding correctness, instruction following, completion failures, paired uncertainty estimates, and an evidence-selected follow-up. Its [input inventory](research/qwen38-nvfp4/inputs.lock.json) pins the checkpoint, dataset, and scorer revisions.
 
-Model storage is prepared at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting the existing HDD. NVIDIA's pinned checkpoint has been downloaded and checked against its published file hashes. It has now loaded through an approved read-only input and generated the requested `READY` response on the allocated RTX PRO 6000, using the pinned vLLM image with networking disabled. The [recorded compatibility check](research/qwen38-nvfp4/brief.md#verified-runtime-compatibility) proves that execution path—not quantization quality. The comparison, remaining checkpoint checks, and isolated grading path have not run.
+All five pinned checkpoints are downloaded, checked against publisher file hashes, and registered on the existing HDD at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting it.
+
+NVIDIA's checkpoint has loaded through an approved read-only input and generated `READY` on the allocated RTX PRO 6000 with networking disabled. The task inventory is frozen, and the isolated official graders have passed real positive/negative controls. These [recorded checks](research/qwen38-nvfp4/brief.md#verified-runtime-compatibility) establish preparation and execution paths—not quantization quality. All-five checkpoint inference on the compatibility tasks and the primary comparison remain unverified.
 
 ## Record-store commands
 

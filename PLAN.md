@@ -505,3 +505,5 @@ A startup regression reproduced a client deadline failure while rejecting a modi
 | After PATH isolation | 15.658 | No |
 
 Both attempts rejected the changed input without creating a container; no timeout or resource allowance was relaxed. Final verification passed all 191 tests with real rootless Podman and `ResourceWarning` treated as an error, including Windows DPAPI credential checks. All nine official-scorer controls also passed after the fixes. All-five checkpoint inference and the primary comparison remain separate, not-yet-verified work.
+
+All five pinned checkpoints subsequently finished downloading and publisher-hash verification on the allocated HDD. Their approved input IDs, inventory hashes, and byte counts are recorded in `research/qwen38-nvfp4/inputs.lock.json`; no weights or private benchmark tests are committed. Runtime compatibility for the remaining checkpoints is not inferred from successful staging.
