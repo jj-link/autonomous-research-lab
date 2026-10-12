@@ -488,3 +488,20 @@ Verification: all 133 tests passed in NVIDIA-Workbench WSL with `ResourceWarning
 Chromium checks rejected direct host paths and saved a draft with registered input bindings and zero model calls. The original dashboard was restarted on port 8767 with its existing state; its actual page still showed the Codex account connected and displayed the new input controls. These checks do not establish live Codex inference or quantization quality.
 
 The recorded NVIDIA checkpoint attempt `run_caf1332d8e014809a27dadfce145bbd5` subsequently completed with exit code 0: the real model returned `READY` through the offline, read-only-input GPU worker. Source, raw generation, timings, artifacts, and earlier failed attempts remain in the local record. The study brief and input inventory record the exact scope and resource observations. The other checkpoints, task compatibility checks, graders, primary comparison, and live Codex research loop remain unverified; this milestone makes no scientific quality claim.
+
+### Frozen Qwen3.8 tasks and isolated official grading
+
+Added pinned dataset/tokenizer staging, bounded-memory deterministic selection, and an offline prompt-freezing worker. The real freeze attempt `run_92ca9a65062e432bbc35f755ab2d3e7f` verified all five token identities and produced disjoint compatibility and primary inputs. All selected prompts fit the declared context/output allowance. Public prompts and private grading inputs are registered separately; dataset terms, rendered hashes, and provenance are recorded in the study brief and inventory.
+
+Added a digest-pinned CPU grading image with the unmodified official LiveCodeBench and IFEval scorers, hash-locked dependencies, and offline language/sentence-tokenizer assets. Per-response grading uses a network-disabled worker, process-group cleanup, explicit correctness/failure distinctions, and preserved extraction evidence. Official LiveCodeBench scoring does not prevent adversarial candidate introspection; the container protects the host, not scorer integrity.
+
+Real positive/negative controls exercised both scorers, test and whole-call timeouts, abnormal child exit, and strict/loose IFEval disagreement. A valid large answer reproduced the observation-file size failure; a compact summary with a complete hash-linked `grading.json` artifact then passed that same control without truncation. These are grading and preparation checks, not quantization-quality results.
+
+A startup regression reproduced a client deadline failure while rejecting a modified input. Podman's debug trace showed repeated Windows-drive executable searches for absent optional OCI runtimes. Worker subprocesses now preserve the selected Podman executable and native Linux paths while excluding Windows-drive PATH entries in WSL; the parent environment is unchanged.
+
+| Modified-input smoke check | Total seconds | Client wait timed out |
+|---|---:|---|
+| Before PATH isolation | 116.213 | Yes |
+| After PATH isolation | 15.658 | No |
+
+Both attempts rejected the changed input without creating a container; no timeout or resource allowance was relaxed. Final verification passed all 191 tests with real rootless Podman and `ResourceWarning` treated as an error, including Windows DPAPI credential checks. All nine official-scorer controls also passed after the fixes. All-five checkpoint inference and the primary comparison remain separate, not-yet-verified work.

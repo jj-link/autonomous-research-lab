@@ -74,6 +74,8 @@ This is a read-only **container mount**, not an immutable host filesystem: the t
 
 Execution requires Linux/WSL with local **rootless Podman**, cgroup v2, and delegated memory and PID controllers. It does not use Docker Desktop or change host resource settings.
 
+In WSL, worker Podman subprocesses exclude Windows-drive directories (`/mnt/<drive>/...`) from their executable search path. This avoids repeated slow searches for optional OCI runtimes. The selected Podman executable and native Linux search paths are preserved; the parent environment is unchanged, so Codex's Windows credential helpers remain available.
+
 From the repository inside Linux/WSL, after installing the CLI above:
 
 ```sh
@@ -120,6 +122,25 @@ The inference image uses [Linux abstract IPC sockets](https://libzmq.readthedocs
 The worker explicitly mounts a private, non-executable `/dev/shm` for multiprocessing locks and shared memory. Its capacity is bounded by the experiment's memory allowance and charged to the same memory cgroup; it is not persistent artifact storage. The root filesystem, `/tmp`, and `/run` remain read-only.
 
 For large inputs, prefer `arl run EXPERIMENT_ID` followed by `arl wait ATTEMPT_ID --timeout SECONDS` with an explicit client wait. Content verification happens before the container starts; the default client wait of the experiment's wall limit plus 90 seconds may expire during lengthy preparation. A client timeout does not cancel or authorize resubmitting the recorded attempt.
+
+### Qwen3.8 comparison preparation
+
+The [study protocol](research/qwen38-nvfp4/brief.md) pins the five checkpoints, task selection, serving conditions, and scoring rules. Its host-side preparation commands run inside the existing WSL project and `.arl` store:
+
+```sh
+.venv-linux/bin/python research/qwen38-nvfp4/provision_grader.py
+.venv-linux/bin/python research/qwen38-nvfp4/stage_tasks.py
+.venv-linux/bin/python research/qwen38-nvfp4/stage_tokenizers.py
+.venv-linux/bin/python research/qwen38-nvfp4/study.py freeze
+.venv-linux/bin/python research/qwen38-nvfp4/study.py generate nvidia
+.venv-linux/bin/python research/qwen38-nvfp4/study.py grade nvidia
+```
+
+Stage each checkpoint with `stage_checkpoint.py` before generating for its label; accepted labels are `bf16`, `unsloth`, `nvidia`, `radixark`, and `quasar`. Execute one checkpoint at a time. Do not launch duplicate invocations for the same study job. Repeating a completed/failed execution command reads its recorded immutable attempt rather than silently generating new answers.
+
+Provisioning downloads public pinned scorer code, hash-locked dependencies, and sentence-tokenizer assets into a dedicated build context. Experiment containers remain offline. Dataset selection streams the raw files and retains only the ranked selection, separating public prompts from private grading data. `freeze` checks tokenizer identity and renders both splits before inference; the generation command is restricted to the sixteen compatibility items at seed 17, not the primary comparison.
+
+Receipts and attempt links are under `.arl/studies/qwen38-nvfp4`. The internal `grading-runner` store uses a CPU-only image without changing the dashboard's signed-in workspace or main inference runner. Each grader receives one response and that task's private tests, not checkpoints or credentials. Dataset contents stay in ignored local storage and must not be committed or redistributed as part of this study. Compatibility checks and synthetic scorer controls are not primary quality results.
 
 ### Enforced boundaries and limits
 

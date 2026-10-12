@@ -1,0 +1,13 @@
+FROM docker.io/library/python:3.12-slim-bookworm@sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d
+LABEL org.autonomous-research-lab.runtime="CPU-only official pinned LiveCodeBench and IFEval scorers. Offline grading of one response; untrusted code must remain inside the worker container."
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TMPDIR=/workspace \
+    ARL_ISOLATED_GRADING=1 NLTK_DATA=/opt/nltk_data
+WORKDIR /workspace
+COPY requirements-grading.txt /opt/requirements-grading.txt
+RUN python -m pip install --no-cache-dir --require-hashes -r /opt/requirements-grading.txt \
+    && python -m pip check
+COPY upstream/ /opt/scorers/
+COPY nltk_data/ /opt/nltk_data/
+COPY build-inputs.json /opt/scorers/build-inputs.json
+RUN python -c "import pathlib, site; pathlib.Path(site.getsitepackages()[0], 'arl-scorers.pth').write_text('/opt/scorers\n')"
+ENTRYPOINT ["python3"]

@@ -48,6 +48,90 @@
       "quality_comparison_performed": false
     }
   },
+  "grading_runtime": {
+    "containerfile": "Containerfile.grading",
+    "base_image": "docker.io/library/python:3.12-slim-bookworm@sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d",
+    "local_image_id": "060d8cb372c2dd98f6859bae34fed9c0fa2bb06195722a0c784edb64c02023c5",
+    "local_image_digest": "sha256:fe9e33d51f50e4b1c7aef3c6355523ed94ff75802a7a61e37c3ab6e0e92950b4",
+    "requirements_file": "requirements-grading.txt",
+    "requirements_sha256": "ff989f296e99ceca418a9c80e1bcb044d85db034d729916bd5d9cc6f99f5238b",
+    "nltk_data_revision": "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a",
+    "versions": {
+      "python": "3.12.15",
+      "numpy": "2.5.4",
+      "nltk": "3.10.3",
+      "langdetect": "1.0.9",
+      "absl-py": "2.5.1",
+      "immutabledict": "4.3.1"
+    },
+    "worker_network": "none",
+    "gpu": false,
+    "ifeval_evaluator_seed": 0,
+    "livecodebench_per_test_seconds": 6,
+    "verification": {
+      "verified_on": "2026-10-12",
+      "scope": "Nine synthetic controls after report-storage and WSL startup fixes, through the real offline CPU worker and official scorers; not checkpoint quality measurements.",
+      "controls_passed": 9,
+      "receipt": ".arl/studies/qwen38-nvfp4/grader-controls-path-fix/summary.json",
+      "earlier_control_directories": [
+        ".arl/studies/qwen38-nvfp4/grader-controls",
+        ".arl/studies/qwen38-nvfp4/grader-controls-report-v2"
+      ],
+      "retained_startup_failure": "run_b46c0aea3d0b487887fb623653cd016f",
+      "attempts": {
+        "stdin_right": "run_83e1b90a0cbd4a15afe31ddc855090fd",
+        "stdin_wrong": "run_ca971ee881e348319e0cf0c7947eef83",
+        "function_right": "run_a14c50515b384f43ae8aa9c47118058b",
+        "per_test_timeout": "run_c92caa8db37c4c9485830ba9189ac31c",
+        "child_exit": "run_7e580cdf1eb549b7aeef0aec7be916ad",
+        "whole_call_timeout": "run_44ab701caeb041e293dc27b2c8e49700",
+        "ifeval_right": "run_25718b197bd343b9b867a44c1241cafb",
+        "ifeval_wrong": "run_bb89c2175f534d0b97a3d8d4e4d3058c",
+        "ifeval_strict_loose": "run_9037fb5ebfd749cb9ad7806b58d4bdcf"
+      }
+    },
+    "large_report_verification": {
+      "failed_before_attempt_id": "run_2f3e7500496946e7b8da250008193ee7",
+      "passed_after_attempt_id": "run_6d3e00075d6b4b058a761978466ebd19",
+      "response_characters": 1100002,
+      "correct": 1,
+      "full_report_bytes": 1100967,
+      "full_report_sha256": "ea91111e90173aad2a3478d94ed2d6b258b14ee802818bcfcc75893469fa252a",
+      "storage": "Compact results.json with a hash-linked, untruncated grading.json artifact"
+    }
+  },
+  "task_inventory": {
+    "freeze_attempt_id": "run_92ca9a65062e432bbc35f755ab2d3e7f",
+    "receipt": ".arl/studies/qwen38-nvfp4/frozen.json",
+    "source_receipt": ".arl/studies/qwen38-nvfp4/tasks.json",
+    "selection_namespace": "arl-qwen38-nvfp4-v1",
+    "selection_rank": "sha256_utf8_then_dataset_id",
+    "common_tokenizer": "bf16",
+    "token_identity_compatible": ["bf16", "unsloth", "nvidia", "radixark", "quasar"],
+    "vocabulary_size": 248077,
+    "vocabulary_sha256": "467543819daf0b32f85b6b8e9097aa1ac1675affa59836c26acbc4a22eb83f0f",
+    "frontend_defaults_differ": ["nvidia", "radixark"],
+    "chat_template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "thinking_enabled": true,
+    "reasoning_effort": "xhigh",
+    "stop_token_ids": [248046, 248044],
+    "compatibility": {
+      "items_per_family": 8,
+      "items": 16,
+      "max_prompt_tokens": 1193,
+      "rendered_file_sha256": "6589676b13df95fe577a1b43051ac8dfcf29de55a4a7f84a8b54362a588f284b",
+      "approved_inventory_sha256": "2cbdd00a0950d1a885412af1b85a511bf17f4665bb2b88c4827152f0a9d48759"
+    },
+    "primary": {
+      "items_per_family": 128,
+      "items": 256,
+      "max_prompt_tokens": 2854,
+      "rendered_file_sha256": "2b7057ac3e0b800133cf20508af7427d81278d44a72f5ed8320e3f37279f9b4c",
+      "approved_inventory_sha256": "b1adb5311183f6b8557295d9d0d74104dec30f0f5557a3226e037ddb50dad00d"
+    },
+    "all_selected_prompts_fit_context_and_output_allowance": true,
+    "quality_comparison_performed": false
+  },
   "model_storage": {
     "windows_root": "D:/models/huggingface",
     "wsl_root": "/mnt/d/models/huggingface",
@@ -113,7 +197,9 @@
       "version_tag": "release_v6",
       "files": ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl"],
       "metadata_source": "https://huggingface.co/api/datasets/livecodebench/code_generation_lite",
-      "provenance_note": "This dataset revision predates the model release. No contamination-free claim is made. The card says cc while its loader says MIT; resolve applicable dataset terms before staging or redistribution."
+      "provenance_note": "This dataset revision predates the model release; no contamination-free claim is made. The card's unspecified cc label and loader's MIT label do not establish blanket rights to source-platform content. The authors describe academic research use under fair use, without training.",
+      "usage_source": "https://arxiv.org/html/2403.07974v1#A1.SS1",
+      "study_usage": "Local noncommercial evaluation only; no training or redistribution of copied problem statements or private tests. Publisher rationale is not a legal guarantee or permission for broader use."
     },
     {
       "label": "ifeval",

@@ -1,0 +1,5 @@
+absl-py
+immutabledict
+langdetect
+nltk==3.10.3
+numpy

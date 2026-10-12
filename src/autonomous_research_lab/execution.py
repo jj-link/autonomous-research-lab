@@ -64,9 +64,26 @@ def configuration(store: Store) -> dict:
     return config
 
 
+def _podman_process(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    executable = shutil.which("podman") or "podman"
+    environment = None
+    if os.environ.get("WSL_DISTRO_NAME"):
+        environment = dict(os.environ)
+        # Optional OCI-runtime discovery otherwise searches every Windows PATH
+        # directory repeatedly. Keep this local to Podman: auth needs Windows tools.
+        environment["PATH"] = os.pathsep.join(
+            path for path in os.get_exec_path()
+            if not re.match(r"^/mnt/[A-Za-z](?:/|$)", path)
+        )
+    return subprocess.run(
+        [executable, *args], env=environment, capture_output=True, text=True,
+        timeout=timeout, check=False,
+    )
+
+
 def podman(*args: str, timeout: int = 30) -> str:
     try:
-        result = subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout, check=False)
+        result = _podman_process(*args, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise LabError(f"Podman {args[0] if args else ''} failed: {exc}") from exc
     if result.returncode:
@@ -133,7 +150,7 @@ def root_label(store: Store) -> str:
 
 def inspect_owned(store: Store, attempt_id: str) -> dict | None:
     name = store.get_attempt(attempt_id).get("container_id") or container_name(attempt_id)
-    result = subprocess.run(["podman", "container", "inspect", name], capture_output=True, text=True, timeout=30)
+    result = _podman_process("container", "inspect", name)
     if result.returncode:
         if "no such" in result.stderr.lower() or "does not exist" in result.stderr.lower():
             return None
