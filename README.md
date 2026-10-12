@@ -43,6 +43,8 @@ Replace `EXPERIMENT_ID` with the ID returned by `submit`. A manifest specifies `
 
 State defaults to `.arl/`; `arl --root DIRECTORY ...` selects another store. Source directories must not contain that store. Symlinks, special files, escaping paths, and source bundles over 256 MiB are rejected.
 
+On WSL, keep SQLite record files on a native Linux filesystem rather than a Windows mount. The store's `research.sqlite3` may link to an existing database there; resolving that file does not change the workspace root, artifact paths, or Codex authentication namespace. Stop database writers before relocating records, and back up the database target as well as the workspace. An unavailable link target fails closed instead of creating an empty replacement history.
+
 ### Approve large read-only inputs
 
 Checkpoints and datasets do not belong in the small source bundle or inline text fields. The host operator approves a dedicated directory in the same record store used for execution:

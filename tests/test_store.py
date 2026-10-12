@@ -51,6 +51,35 @@ class StoreTests(unittest.TestCase):
         self.assertNotEqual(retry["id"], attempt["id"])
         self.assertEqual(len(reopened.list_attempts(experiment["id"])), 2)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX link fixture")
+    def test_external_database_preserves_history_and_gpu_lease_in_same_workspace(self):
+        experiment = self.submit(gpu=True)
+        attempt = self.store.create_attempt(experiment["id"], gpu_uuid=GPU)
+        external = self.folder / "external.sqlite3"
+        original = self.store.db_path
+        original.replace(external)
+        original.symlink_to(external)
+        reopened = Store(self.store.root)
+        self.assertEqual(reopened.root, self.store.root)
+        self.assertEqual(reopened.get_attempt(attempt["id"]), attempt)
+        with self.assertRaises(LabError):
+            reopened.create_attempt(experiment["id"], gpu_uuid=GPU)
+        reopened.update_attempt(attempt["id"], state="failed", error="preserved after relocation")
+        self.assertEqual(self.store.get_attempt(attempt["id"])["error"], "preserved after relocation")
+        self.assertEqual(reopened.db_path, external.resolve())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX link fixture")
+    def test_missing_linked_database_never_creates_an_empty_history(self):
+        original = self.store.db_path
+        retained = self.folder / "retained.sqlite3"
+        original.replace(retained)
+        missing = self.folder / "missing.sqlite3"
+        original.symlink_to(missing)
+        with self.assertRaisesRegex(LabError, "no empty replacement"):
+            Store(self.store.root)
+        self.assertFalse(missing.exists())
+        self.assertTrue(retained.is_file())
+
     def test_gpu_reservation_is_atomic_and_case_insensitive(self):
         experiment = self.submit(gpu=True)
         barrier = threading.Barrier(2)

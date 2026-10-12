@@ -118,12 +118,15 @@ class Store:
     def __init__(self, root: Path):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.root / "research.sqlite3"
+        database = self.root / "research.sqlite3"
+        if database.is_symlink() and not database.is_file():
+            raise LabError("The linked record database is unavailable; no empty replacement was created")
+        self.db_path = database.resolve()
         with self._db() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1):
                 raise LabError(f"Unsupported record schema version: {version}")
-            # Rollback journaling avoids WAL shared-memory locking on WSL/DrvFS.
+            # Keep journals beside the resolved database, including native-WSL targets.
             connection.execute("PRAGMA journal_mode=DELETE")
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS experiments (
