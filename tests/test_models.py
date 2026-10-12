@@ -34,6 +34,16 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(LabError):
             self.manifest(gpu="false")
 
+    def test_input_bindings_reject_host_paths_and_mount_path_injection(self):
+        input_id = "input_" + "a" * 32
+        for bindings in (
+            {"/host": input_id}, {"../secret": input_id}, {"nested/model": input_id},
+            {"model": "/mnt/d/weights"}, {"model": {"path": "/secrets"}}, [],
+            {"x" * 65: input_id}, {f"input{i}": input_id for i in range(17)},
+        ):
+            with self.subTest(bindings=bindings), self.assertRaises(LabError):
+                self.manifest(inputs=bindings)
+
     def test_unsupported_versions_fail_instead_of_being_reinterpreted(self):
         with self.assertRaises(LabError):
             self.manifest(schema_version=2)

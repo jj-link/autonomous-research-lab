@@ -1,0 +1,10 @@
+# vLLM v0.27.1-cu129-ubuntu2404, Linux amd64; pin the platform image, not a moving tag.
+FROM docker.io/vllm/vllm-openai@sha256:e38f9a10e3da532119c7bba2448663a36171a6859f92b8fcdac620882f63119b
+LABEL org.autonomous-research-lab.runtime="Python with PyTorch, vLLM 0.27.1, transformers, NumPy and safetensors. Offline inference from approved /inputs paths. Use a multiprocessing main guard; write caches and scratch files only under /workspace."
+# Linux abstract IPC avoids filesystem sockets on Windows-backed WSL workspaces.
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 \
+    VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 VLLM_WORKER_MULTIPROC_METHOD=spawn \
+    VLLM_HOST_IP=127.0.0.1 VLLM_RPC_BASE_PATH=@arl
+WORKDIR /workspace
+ENTRYPOINT ["python3"]

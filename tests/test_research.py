@@ -15,7 +15,7 @@ from autonomous_research_lab.store import Store
 class ResearchTests(unittest.TestCase):
     def setUp(self):
         self.folder = Path(__file__).resolve().parents[1] / ".arl-cache" / "tests" / uuid.uuid4().hex
-        self.engine = ResearchEngine(Store(self.folder))
+        self.engine = ResearchEngine(Store(self.folder / "state"))
         self.program = self.engine.create({"goal": "Investigate a bounded question", "model": {"base_url": "https://api.example.com/v1", "model": "protocol-fixture"}})
         self.id = self.program["id"]
 
@@ -107,6 +107,35 @@ class ResearchTests(unittest.TestCase):
         for extra in ({"data_files": {"../secret": "x"}}, {"max_model_calls": 101}, {"max_repairs": True}, {"max_experiments": 0}):
             with self.subTest(extra=extra), self.assertRaises(LabError):
                 validate_brief({**self.program["brief"], **extra})
+
+    def test_builder_cannot_drop_replace_rename_or_expand_approved_inputs(self):
+        ids = []
+        for name in ("approved", "unapproved"):
+            directory = self.folder / name
+            directory.mkdir()
+            (directory / "data.txt").write_text(name)
+            ids.append(self.engine.store.register_input(directory, name)["id"])
+        permitted = {"model": ids[0]}
+        original_brief = self.program["brief"]
+        for bindings in ({}, {"model": ids[1]}, {"other": ids[0]}, {**permitted, "private": ids[1]}):
+            with self.subTest(bindings=bindings):
+                self.program = self.engine.create({**original_brief, "inputs": permitted})
+                self.id = self.program["id"]
+                design = {"id": new_id("design"), "question": "Read the approved input",
+                          "procedure": "Measure its contents", "resources": self.program["brief"]["resources"]}
+                self.pending({"files": {"main.py": "raise AssertionError('must not execute')"},
+                              "manifest": {"name": "input-boundary", "source": "code", "entrypoint": "main.py",
+                                           "question": design["question"], "procedure": design["procedure"],
+                                           "gpu": design["resources"]["gpu"],
+                                           "limits": {k: v for k, v in design["resources"].items() if k != "gpu"},
+                                           "inputs": bindings}}, role="builder")
+                self.engine._change(self.id, lambda p: p.update(
+                    phase="build", designs=[design], selected_design_id=design["id"]))
+                self.engine._build(self.id)
+                implementation = self.engine.get(self.id)["implementations"][-1]
+                self.assertEqual(implementation["status"], "invalid")
+                self.assertIsNone(implementation["experiment_id"])
+                self.assertEqual(self.engine.store.list_experiments(), [])
 
 
 if __name__ == "__main__":

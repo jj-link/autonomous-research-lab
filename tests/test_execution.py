@@ -8,6 +8,7 @@ import shutil
 import signal
 import time
 import unittest
+from unittest.mock import patch
 import uuid
 
 from autonomous_research_lab.execution import (
@@ -36,11 +37,11 @@ class ExecutionTests(unittest.TestCase):
                 podman("rm", container_name(attempt["id"]))
         shutil.rmtree(self.folder)
 
-    def submit(self, code, **limits):
+    def submit(self, code, *, inputs=None, **limits):
         (self.source / "main.py").write_text(code, encoding="utf-8")
         budget = {"wall_seconds": 8, "memory_bytes": 64 * 1024**2, "output_bytes": 1024**2, "log_bytes": 65536, "pids": 32}
         budget.update(limits)
-        return self.store.submit(ExperimentSpec.from_dict({"name": "integration", "source": str(self.source), "entrypoint": "main.py", "limits": budget}, self.folder))
+        return self.store.submit(ExperimentSpec.from_dict({"name": "integration", "source": str(self.source), "entrypoint": "main.py", "limits": budget, "inputs": inputs or {}}, self.folder))
 
     def await_running(self, attempt_id):
         deadline = time.monotonic() + 90
@@ -93,6 +94,94 @@ print("boundary checks passed")
         self.assertEqual(result["result"]["observations"]["metrics"]["answer"], 42)
         self.assertNotIn("escape", {row["path"] for row in result["result"]["artifacts"]})
         self.assertTrue(any("escape" in warning for warning in result["result"]["artifact_warnings"]))
+
+    def test_spawned_processes_share_memory_without_writable_root(self):
+        experiment = self.submit('''import json, multiprocessing
+from pathlib import Path
+
+def increment(counter):
+    for _ in range(1000):
+        with counter.get_lock():
+            counter.value += 1
+
+if __name__ == "__main__":
+    for folder in ("/", "/tmp", "/run"):
+        try:
+            (Path(folder) / "must-not-write").write_text("unsafe")
+        except OSError:
+            pass
+        else:
+            raise AssertionError(f"{folder} became writable")
+    context = multiprocessing.get_context("spawn")
+    counter = context.Value("i", 0)
+    children = [context.Process(target=increment, args=(counter,)) for _ in range(2)]
+    for child in children:
+        child.start()
+    for child in children:
+        child.join(15)
+        assert child.exitcode == 0, child.exitcode
+    Path("/workspace/results.json").write_text(json.dumps({"metrics": {"increments": counter.value}}))
+''', wall_seconds=30, memory_bytes=128 * 1024**2)
+        result = run(self.store, experiment["id"], wait=True)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["result"]["observations"]["metrics"]["increments"], 2000)
+
+    def test_only_approved_input_is_readable_and_cannot_be_modified(self):
+        data = self.folder / "approved"
+        data.mkdir()
+        (data / "value.txt").write_text("verified checkpoint contents")
+        (self.folder / "private.txt").write_text("must not be mounted")
+        approved = self.store.register_input(data, "checkpoint")
+        experiment = self.submit('''import json, os
+from pathlib import Path
+path = Path(json.loads(os.environ["ARL_INPUTS"])["model"])
+assert (path / "value.txt").read_text() == "verified checkpoint contents"
+assert not (path / "../private.txt").exists()
+try:
+    (path / "value.txt").write_text("tampered")
+except OSError:
+    pass
+else:
+    raise AssertionError("approved input is writable")
+Path("/workspace/results.json").write_text(json.dumps({"metrics": {"input_read_only": 1}}))
+''', inputs={"model": approved["id"]})
+        result = run(self.store, experiment["id"], wait=True)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["result"]["observations"]["metrics"]["input_read_only"], 1)
+        self.assertEqual((data / "value.txt").read_text(), "verified checkpoint contents")
+
+    def test_changed_input_prevents_container_execution(self):
+        data = self.folder / "approved"
+        data.mkdir()
+        file = data / "weights.bin"
+        file.write_bytes(b"original")
+        approved = self.store.register_input(data, "checkpoint")
+        experiment = self.submit("raise AssertionError('must not execute')\n", inputs={"model": approved["id"]})
+        file.write_bytes(b"modified")
+        result = run(self.store, experiment["id"], wait=True)
+        self.assertEqual(result["state"], "failed", result)
+        self.assertIsNone(inspect_owned(self.store, result["id"]))
+
+    def test_different_rootless_mount_view_prevents_execution(self):
+        data = self.folder / "approved"
+        data.mkdir()
+        (data / "data.txt").write_text("approved")
+        approved = self.store.register_input(data, "checkpoint")
+        foreign = self.folder / "foreign"
+        foreign.mkdir()
+        meta = foreign.stat()
+        experiment = self.submit("raise AssertionError('must not execute')\n", inputs={"model": approved["id"]})
+        attempt = self.store.create_attempt(experiment["id"])
+
+        def stale_namespace(*args, **kwargs):
+            if args[:2] == ("unshare", "stat"):
+                return f"{meta.st_dev} {meta.st_ino}\n"
+            return podman(*args, **kwargs)
+
+        with patch("autonomous_research_lab.execution.podman", side_effect=stale_namespace):
+            result = supervise(self.store, attempt["id"])
+        self.assertEqual(result["state"], "failed", result)
+        self.assertIsNone(inspect_owned(self.store, result["id"]))
 
     def test_failure_retains_output_and_logs(self):
         experiment = self.submit("from pathlib import Path\nPath('/workspace/partial.txt').write_text('retained')\nprint('before failure', flush=True)\nraise RuntimeError('deliberate failure')\n")

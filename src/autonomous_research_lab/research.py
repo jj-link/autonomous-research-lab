@@ -15,7 +15,7 @@ import uuid
 from . import execution, prompts
 from .codex_auth import CodexAuth
 from .model_client import ModelClient, ModelError, validate_model_config
-from .models import LabError, Limits, ExperimentSpec, TERMINAL_STATES, canonical_json, positive_int, read_json, relative_path, require_keys
+from .models import LabError, Limits, ExperimentSpec, TERMINAL_STATES, canonical_json, input_bindings, positive_int, read_json, relative_path, require_keys
 from .sources import SourceTools
 from .store import Store, identifier, utc_now
 
@@ -57,7 +57,7 @@ def within(requested, maximum):
 
 
 def validate_brief(value):
-    allowed = {"goal", "scope", "sources", "model", "max_experiments", "max_model_calls", "max_output_tokens_per_call", "max_wall_seconds", "max_repairs", "resources", "policy", "data_files"}
+    allowed = {"goal", "scope", "sources", "model", "max_experiments", "max_model_calls", "max_output_tokens_per_call", "max_wall_seconds", "max_repairs", "resources", "policy", "data_files", "inputs"}
     require_keys(value, allowed, "brief")
     brief = {"goal": text(value.get("goal"), "goal"), "scope": value.get("scope", ""),
              "model": validate_model_config(value.get("model")), "sources": strings(value.get("sources", []), "sources"),
@@ -92,6 +92,7 @@ def validate_brief(value):
     if sum(len(v.encode("utf-8")) for v in data.values()) > 256 * 1024:
         raise LabError("Approved data exceeds 256 KiB")
     brief["data_files"] = data
+    brief["inputs"] = input_bindings(value.get("inputs", {}))
     canonical_json(brief)
     return brief
 
@@ -161,6 +162,7 @@ class ResearchEngine:
 
     def create(self, brief):
         brief = validate_brief(brief)
+        self.store.resolve_inputs(brief["inputs"])
         program_id, question_id = new_id("program"), new_id("question")
         stamp = utc_now()
         program = {"id": program_id, "state": "draft", "phase": "sources", "brief": brief, "created_at": stamp, "updated_at": stamp,
@@ -181,7 +183,8 @@ class ResearchEngine:
             ModelClient(config, auth=self.auth).check_auth()
         resources = program["brief"]["resources"]
         spec = ExperimentSpec.from_dict({"name": "preflight", "source": "code", "entrypoint": "main.py", "gpu": resources["gpu"],
-                                        "limits": {k: resources[k] for k in Limits.__dataclass_fields__}}, self.folder(program["id"]))
+                                        "limits": {k: resources[k] for k in Limits.__dataclass_fields__},
+                                        "inputs": program["brief"].get("inputs", {})}, self.folder(program["id"]))
         runner = execution.configuration(self.store)
         return execution.prepare(self.store, {"gpu_uuid": runner.get("gpu_uuid") if spec.gpu else None}, spec)
 
@@ -500,7 +503,9 @@ class ResearchEngine:
         for item in prior:
             proposal = read_json(self.folder(program_id) / "calls" / (item["call_id"] + ".json"), 16 * 1024**2)["response"]["content"]
             previous.append({**item, "proposal": proposal, "attempt": self._attempt_record(item["attempt_id"]) if item.get("attempt_id") else None})
-        response = self._call(program_id, "builder", {"design": design, "environment": program["environment"], "approved_data": program["brief"]["data_files"], "prior_implementations": previous})
+        approved_inputs = program["brief"].get("inputs", {})
+        response = self._call(program_id, "builder", {"design": design, "environment": program["environment"], "approved_data": program["brief"]["data_files"],
+                                                     "approved_inputs": self.store.resolve_inputs(approved_inputs), "prior_implementations": previous})
         call_id = self.get(program_id)["pending_call_id"]
         implementation = next((i for i in prior if i["call_id"] == call_id), None)
         if implementation is None:
@@ -516,6 +521,8 @@ class ResearchEngine:
             if not isinstance(manifest, dict) or manifest.get("source") != "code":
                 raise LabError("Builder manifest.source must be exactly code")
             spec = ExperimentSpec.from_dict(manifest, folder)
+            if spec.inputs != approved_inputs:
+                raise LabError("Builder inputs must exactly match the brief's approved input bindings")
             within({"gpu": spec.gpu, **spec.limits.to_dict()}, design["resources"])
             if spec.question != design["question"] or spec.procedure != design["procedure"]:
                 raise LabError("Builder changed the selected question or procedure")

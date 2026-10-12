@@ -68,6 +68,17 @@ def require_keys(value: Any, allowed: set[str], label: str) -> dict:
     return value
 
 
+def input_bindings(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or len(value) > 16:
+        raise LabError("inputs must map at most 16 aliases to registered input IDs")
+    for alias, input_id in value.items():
+        if not isinstance(alias, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", alias):
+            raise LabError("Input aliases must be lowercase slugs, not paths")
+        if not isinstance(input_id, str) or not re.fullmatch(r"input_[0-9a-f]{32}", input_id):
+            raise LabError("Inputs must reference registered input IDs, not host paths")
+    return dict(sorted(value.items()))
+
+
 @dataclass(frozen=True)
 class Limits:
     wall_seconds: int = 300
@@ -108,10 +119,11 @@ class ExperimentSpec:
     outputs: tuple[str, ...] = ("results.json",)
     gpu: bool = False
     limits: Limits = field(default_factory=Limits)
+    inputs: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, value: Any, base: Path) -> "ExperimentSpec":
-        require_keys(value, {"schema_version", "name", "source", "entrypoint", "question", "procedure", "args", "settings", "outputs", "gpu", "limits"}, "experiment")
+        require_keys(value, {"schema_version", "name", "source", "entrypoint", "question", "procedure", "args", "settings", "outputs", "gpu", "limits", "inputs"}, "experiment")
         if value.get("schema_version", 1) != 1:
             raise LabError("Unsupported experiment schema_version; expected 1")
         name = value.get("name")
@@ -141,12 +153,13 @@ class ExperimentSpec:
         for key in ("question", "procedure"):
             if not isinstance(value.get(key, ""), str):
                 raise LabError(f"{key} must be a string")
-        return cls(name, source_path, entrypoint, value.get("question", ""), value.get("procedure", ""), tuple(args), settings, outputs, gpu, Limits.from_dict(value.get("limits", {})))
+        return cls(name, source_path, entrypoint, value.get("question", ""), value.get("procedure", ""), tuple(args), settings, outputs, gpu, Limits.from_dict(value.get("limits", {})), input_bindings(value.get("inputs", {})))
 
     def to_dict(self) -> dict:
         return {"schema_version": 1, "name": self.name, "source": str(self.source), "entrypoint": self.entrypoint,
                 "question": self.question, "procedure": self.procedure, "args": list(self.args),
-                "settings": self.settings, "outputs": list(self.outputs), "gpu": self.gpu, "limits": self.limits.to_dict()}
+                "settings": self.settings, "outputs": list(self.outputs), "gpu": self.gpu, "limits": self.limits.to_dict(),
+                **({"inputs": self.inputs} if self.inputs else {})}
 
 
 def load_manifest(path: Path) -> ExperimentSpec:

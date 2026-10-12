@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 secure-keyring = ["keyring>=25,<26"]
+model-download = ["huggingface-hub==2.2.0"]
 
 [project.scripts]
 arl = "autonomous_research_lab.cli:main"

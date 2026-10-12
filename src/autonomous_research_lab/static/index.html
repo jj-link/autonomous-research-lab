@@ -130,6 +130,11 @@
           <div class="grid-form">
             <div class="field span-2"><label for="brief-sources">Source URLs (public HTTPS, one per line)</label><textarea id="brief-sources" rows="2"></textarea></div>
             <div class="field span-2"><label for="brief-data">Approved text or CSV data (256 KiB total)</label><input id="brief-data" type="file" multiple></div>
+            <div class="field span-2">
+              <label for="brief-inputs">Registered read-only inputs (JSON)</label>
+              <textarea id="brief-inputs" rows="2" spellcheck="false" placeholder='{"model": "input_…"}'></textarea>
+              <p class="hint">Map aliases to IDs from <code>arl input register</code>. Each directory is verified and mounted read-only; host paths cannot be supplied here. Leave blank for no large inputs.</p>
+            </div>
             <div class="field"><label for="brief-policy">Research policy</label><select id="brief-policy"><option value="candidate_comparison">Compare candidate experiments</option><option value="direct">Choose one follow-up directly</option><option value="fixed_plan">Commit to an initial fixed plan</option></select></div>
             <div class="field"><label for="brief-tokens">Output tokens per model call</label><input id="brief-tokens" type="number" min="128" max="32768" value="8192"><p id="model-token-note" class="hint"></p></div>
             <div class="field"><label for="brief-memory">Host memory per experiment (MiB)</label><input id="brief-memory" type="number" min="16" value="2048"></div>

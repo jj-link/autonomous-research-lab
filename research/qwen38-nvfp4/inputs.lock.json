@@ -7,6 +7,47 @@
     "model": "gpt-6-astra",
     "catalog_verified_on": "2026-10-11"
   },
+  "inference_runtime": {
+    "containerfile": "Containerfile.inference",
+    "base_image": "docker.io/vllm/vllm-openai@sha256:e38f9a10e3da532119c7bba2448663a36171a6859f92b8fcdac620882f63119b",
+    "local_image_id": "744aea03fe1b04ad16ded172b2de303cfdaf140328a7bb0faec6e42bae7e97f9",
+    "local_image_digest": "localhost/arl-inference@sha256:4316c5493f105a45a8af9bae2b6cc45b36f546e7ebcef2c9d2495f5786187c48",
+    "platform": "linux/amd64",
+    "versions": {
+      "python": "3.12.3",
+      "torch": "2.13.0+cu129",
+      "vllm": "0.27.1+cu129",
+      "transformers": "5.15.0",
+      "safetensors": "0.8.0",
+      "cuda_runtime": "12.9"
+    },
+    "gpu_uuid": "GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309",
+    "compute_capability": [12, 0],
+    "worker_network": "none",
+    "package_and_gpu_probe_verified_on": "2026-10-12",
+    "ipc_transport": "ZeroMQ Linux abstract sockets; VLLM_RPC_BASE_PATH=@arl",
+    "verification_scope": "Package imports, allocated device identity, CUDA computation, cross-process abstract IPC, and the separately recorded NVIDIA checkpoint probe. These are not quality measurements.",
+    "checkpoint_probe": {
+      "verified_on": "2026-10-12",
+      "checkpoint": "nvidia",
+      "experiment_id": "exp_595059e6841b4cc0801f762eec1ea504",
+      "attempt_id": "run_caf1332d8e014809a27dadfce145bbd5",
+      "state": "completed",
+      "exit_code": 0,
+      "response": "READY",
+      "token_ids": [44061, 248046],
+      "finish_reason": "stop",
+      "generation_artifact_sha256": "17e2088438a92ebcee54a10e79841cf45a223debb35aefd4529f0b2aedae9999",
+      "results_artifact_sha256": "411ff105db574836b75eb0025dc9edc47bb024ff1495618db3117a6f7570358e",
+      "context_length_configured": 32768,
+      "thinking_enabled": false,
+      "load_seconds": 1133.0453557720175,
+      "first_generation_seconds": 94.98618945997441,
+      "peak_cgroup_memory_bytes": 12879024128,
+      "retained_output_bytes": 49332489,
+      "quality_comparison_performed": false
+    }
+  },
   "model_storage": {
     "windows_root": "D:/models/huggingface",
     "wsl_root": "/mnt/d/models/huggingface",
@@ -38,6 +79,15 @@
       "repo_id": "nvidia/Qwen3.8-27B-NVFP4",
       "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
       "role": "Mixed-precision Model Optimizer post-training quantization",
+      "staged_input": {
+        "verified_on": "2026-10-12",
+        "worker_local_id": "input_7e3a4b39660d4f73b9cb340d33841f69",
+        "inventory_sha256": "59639c1dedc070020b0adbc714e09d8635596e253481f8b9a183740ec068ceba",
+        "bytes": 21945296812,
+        "file_count": 60,
+        "publisher_files_verified": 19,
+        "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
+      },
       "metadata_source": "https://huggingface.co/api/models/nvidia/Qwen3.8-27B-NVFP4"
     },
     {

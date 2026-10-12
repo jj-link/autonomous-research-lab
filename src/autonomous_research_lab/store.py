@@ -13,7 +13,7 @@ import sqlite3
 import stat
 import uuid
 
-from .models import ACTIVE_STATES, ALL_STATES, TERMINAL_STATES, ExperimentSpec, LabError, canonical_json, normalize_gpu_uuid
+from .models import ACTIVE_STATES, ALL_STATES, TERMINAL_STATES, ExperimentSpec, LabError, canonical_json, input_bindings, normalize_gpu_uuid
 
 MAX_BUNDLE_BYTES = 256 * 1024**2
 TRANSITIONS = {
@@ -76,6 +76,44 @@ def _digest(folder):
     return digest.hexdigest()
 
 
+def _input_directory(path):
+    path = Path(path).absolute()
+    try:
+        for part in (path, *path.parents):
+            meta = part.lstat()
+            if not stat.S_ISDIR(meta.st_mode) or (getattr(meta, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+                raise LabError(f"Input directory and its parents must be real directories, not links: {part}")
+    except OSError as exc:
+        raise LabError(f"Input directory is unavailable: {path}: {exc}") from exc
+    return path.resolve()
+
+
+def _input_inventory(path):
+    files = []
+    try:
+        for file, original in _tree(_input_directory(path)):
+            digest = hashlib.sha256()
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            with os.fdopen(os.open(file, flags), "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not _regular(before) or (before.st_dev, before.st_ino) != (original.st_dev, original.st_ino):
+                    raise LabError(f"Input changed while hashing: {file}")
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                after = os.fstat(stream.fileno())
+            current = file.lstat()
+            fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            if any(getattr(before, field) != getattr(after, field) or getattr(after, field) != getattr(current, field) for field in fields):
+                raise LabError(f"Input changed while hashing: {file}")
+            files.append({"path": file.relative_to(path).as_posix(), "bytes": before.st_size, "sha256": digest.hexdigest()})
+    except OSError as exc:
+        raise LabError(f"Cannot inventory approved input {path}: {exc}") from exc
+    if not files:
+        raise LabError("An approved input must contain at least one regular file")
+    return {"files": files, "bytes": sum(item["bytes"] for item in files),
+            "sha256": hashlib.sha256(canonical_json(files).encode("utf-8")).hexdigest()}
+
+
 class Store:
     def __init__(self, root: Path):
         self.root = Path(root).resolve()
@@ -90,6 +128,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS experiments (
                     id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
                     manifest TEXT NOT NULL, bundle_hash TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS approved_inputs (
+                    id TEXT PRIMARY KEY, record TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS attempts (
                     id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL REFERENCES experiments(id),
@@ -157,7 +198,53 @@ class Store:
     def attempt_dir(self, attempt_id):
         return self.root / "runs" / identifier(attempt_id, "run")
 
+    def register_input(self, path, name, *, expected_hashes=None):
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", name):
+            raise LabError("Input name must be a 1–80 character slug")
+        path = _input_directory(path)
+        if self.root.is_relative_to(path) or path.is_relative_to(self.root):
+            raise LabError("Approved inputs must be separate from the research store and its credentials")
+        record = {"id": "input_" + uuid.uuid4().hex, "name": name, "source": str(path),
+                  "registered_at": utc_now(), **_input_inventory(path)}
+        observed = {item["path"]: item["sha256"] for item in record["files"]}
+        if expected_hashes is not None and any(observed.get(name) != digest for name, digest in expected_hashes.items()):
+            raise LabError("Input files do not match their expected SHA-256 hashes; approval was not recorded")
+        with self._db(write=True) as connection:
+            connection.execute("INSERT INTO approved_inputs VALUES (?,?)", (record["id"], canonical_json(record)))
+        return record
+
+    def get_input(self, input_id):
+        identifier(input_id, "input")
+        with self._db() as connection:
+            row = connection.execute("SELECT record FROM approved_inputs WHERE id=?", (input_id,)).fetchone()
+        if row is None:
+            raise LabError(f"Input is not registered in this store: {input_id}")
+        return json.loads(row[0])
+
+    def list_inputs(self):
+        with self._db() as connection:
+            return [json.loads(row[0]) for row in connection.execute("SELECT record FROM approved_inputs ORDER BY id")]
+
+    def verify_input(self, input_id):
+        record = self.get_input(input_id)
+        actual = _input_inventory(Path(record["source"]))
+        if any(actual[key] != record[key] for key in ("files", "bytes", "sha256")):
+            raise LabError(f"Approved input changed: {input_id}; register a new input rather than reusing this record")
+        return record
+
+    def input_source(self, input_id):
+        return _input_directory(self.get_input(input_id)["source"])
+
+    def resolve_inputs(self, bindings, *, verify=False):
+        result = {}
+        for alias, input_id in input_bindings(bindings).items():
+            record = self.verify_input(input_id) if verify else self.get_input(input_id)
+            result[alias] = {key: record[key] for key in ("id", "name", "sha256", "bytes")}
+            result[alias].update(path=f"/inputs/{alias}", file_count=len(record["files"]))
+        return result
+
     def submit(self, spec: ExperimentSpec):
+        self.resolve_inputs(spec.inputs)
         if spec.source.is_symlink() or not spec.source.is_dir():
             raise LabError("source must be a real directory, not a symbolic link")
         source = spec.source.resolve()

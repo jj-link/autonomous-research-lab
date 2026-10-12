@@ -28,6 +28,15 @@ def main(argv=None):
     config.add_argument("--image", required=True)
     config.add_argument("--gpu")
     config.add_argument("--gpu-mode", choices=("cdi", "wsl"), default="cdi")
+    inputs = commands.add_parser("input", help="Approve and inspect host-owned read-only input directories")
+    input_commands = inputs.add_subparsers(dest="input_command", required=True)
+    register = input_commands.add_parser("register")
+    register.add_argument("directory", type=Path)
+    register.add_argument("--name", required=True)
+    input_commands.add_parser("list")
+    for name in ("show", "verify"):
+        input_command = input_commands.add_parser(name)
+        input_command.add_argument("id")
     commands.add_parser("doctor", help="Inspect actual worker resources without changing host settings")
     for name in ("run", "stop"):
         command = commands.add_parser(name)
@@ -78,6 +87,15 @@ def main(argv=None):
         exit_code = 0
         if args.command == "submit":
             value = store.submit(load_manifest(args.manifest))
+        elif args.command == "input":
+            if args.input_command == "register":
+                value = store.register_input(args.directory, args.name)
+            elif args.input_command == "list":
+                value = store.list_inputs()
+            elif args.input_command == "verify":
+                value = store.verify_input(args.id)
+            else:
+                value = store.get_input(args.id)
         elif args.command == "list":
             value = store.list_attempts() if args.attempts else store.list_experiments()
         elif args.command == "show":

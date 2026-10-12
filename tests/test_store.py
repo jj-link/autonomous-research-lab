@@ -118,6 +118,69 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(LabError):
             self.store.bundle_dir("../outside")
 
+    def test_approved_input_hashes_survive_reopening_and_detect_same_size_tampering(self):
+        data = self.folder / "approved"
+        data.mkdir()
+        file = data / "weights.bin"
+        file.write_bytes(b"original")
+        approved = self.store.register_input(data, "checkpoint")
+        reopened = Store(self.store.root)
+        self.assertEqual(reopened.verify_input(approved["id"]), approved)
+        before = file.stat()
+        file.write_bytes(b"modified")
+        os.utime(file, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with self.assertRaises(LabError):
+            reopened.verify_input(approved["id"])
+        self.assertEqual(reopened.get_input(approved["id"]), approved)
+
+    def test_publisher_hash_mismatch_is_not_registered(self):
+        with self.assertRaises(LabError):
+            self.store.register_input(self.source, "checkpoint", expected_hashes={"main.py": "0" * 64})
+        self.assertEqual(self.store.list_inputs(), [])
+
+    def test_large_input_is_not_copied_into_the_source_snapshot(self):
+        data = self.folder / "large-input"
+        data.mkdir()
+        with (data / "weights.bin").open("wb") as stream:
+            stream.truncate(256 * 1024**2 + 1)
+        approved = self.store.register_input(data, "large-checkpoint")
+        spec = ExperimentSpec.from_dict({"name": "large-input", "source": str(self.source),
+                                        "entrypoint": "main.py", "inputs": {"model": approved["id"]}}, self.folder)
+        experiment = self.store.submit(spec)
+        self.store.verify_experiment(experiment["id"])
+        self.assertFalse((self.store.bundle_dir(experiment["id"]) / "code/weights.bin").exists())
+        self.assertEqual(self.store.input_source(approved["id"]), data.resolve())
+
+    def test_input_approval_cannot_include_credentials_or_cross_stores(self):
+        for path in (self.store.root, self.folder):
+            with self.subTest(path=path), self.assertRaises(LabError):
+                self.store.register_input(path, "unsafe")
+        foreign = Store(self.folder / "foreign")
+        approved = foreign.register_input(self.source, "foreign-input")
+        spec = ExperimentSpec.from_dict({"name": "foreign", "source": str(self.source),
+                                        "entrypoint": "main.py", "inputs": {"model": approved["id"]}}, self.folder)
+        with self.assertRaises(LabError):
+            self.store.submit(spec)
+        self.assertEqual(self.store.list_experiments(), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX link fixtures")
+    def test_input_links_are_rejected_at_registration_and_before_reuse(self):
+        linked = self.folder / "linked"
+        linked.symlink_to(self.source, target_is_directory=True)
+        with self.assertRaises(LabError):
+            self.store.register_input(linked, "linked")
+        approved = self.store.register_input(self.source, "original")
+        original = self.folder / "moved"
+        self.source.rename(original)
+        self.source.symlink_to(original, target_is_directory=True)
+        with self.assertRaises(LabError):
+            self.store.verify_input(approved["id"])
+        nested = self.folder / "nested"
+        nested.mkdir()
+        (nested / "secret").symlink_to(original / "main.py")
+        with self.assertRaises(LabError):
+            self.store.register_input(nested, "nested-link")
+
 
 if __name__ == "__main__":
     unittest.main()

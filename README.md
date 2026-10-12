@@ -33,7 +33,7 @@ The coordinator has also been exercised with scripted HTTP responses and real is
 
 The [Qwen3.8-27B NVFP4 comparison brief](research/qwen38-nvfp4/brief.md) defines a controlled comparison of four published NVFP4 builds against the original BF16 model: coding correctness, instruction following, completion failures, paired uncertainty estimates, and an evidence-selected follow-up. Its [input inventory](research/qwen38-nvfp4/inputs.lock.json) pins the checkpoint, dataset, and scorer revisions.
 
-Model storage is prepared at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting the existing HDD. The brief records verified storage access and the remaining inference-runtime, read-only model-mount, and grading requirements. This is a completed design/storage milestone, not a completed benchmark or a runnable program submission; no weights have been downloaded for this study.
+Model storage is prepared at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting the existing HDD. NVIDIA's pinned checkpoint has been downloaded and checked against its published file hashes. It has now loaded through an approved read-only input and generated the requested `READY` response on the allocated RTX PRO 6000, using the pinned vLLM image with networking disabled. The [recorded compatibility check](research/qwen38-nvfp4/brief.md#verified-runtime-compatibility) proves that execution path—not quantization quality. The comparison, remaining checkpoint checks, and isolated grading path have not run.
 
 ## Record-store commands
 
@@ -47,9 +47,28 @@ uv pip install --python .venv-linux/bin/python -e .
 .venv-linux/bin/arl show EXPERIMENT_ID
 ```
 
-Replace `EXPERIMENT_ID` with the ID returned by `submit`. A manifest specifies `name`, a dedicated `source` directory, a relative Python `entrypoint`, and optional `question`, `procedure`, `settings`, `args`, `outputs`, `gpu`, and `limits`. Source paths are resolved relative to the manifest. Submission saves inputs; it does not execute code.
+Replace `EXPERIMENT_ID` with the ID returned by `submit`. A manifest specifies `name`, a dedicated `source` directory, a relative Python `entrypoint`, and optional `question`, `procedure`, `settings`, `args`, `outputs`, `gpu`, `limits`, and registered `inputs`. Source paths are resolved relative to the manifest. Submission snapshots source and records input bindings; it does not execute code.
 
 State defaults to `.arl/`; `arl --root DIRECTORY ...` selects another store. Source directories must not contain that store. Symlinks, special files, escaping paths, and source bundles over 256 MiB are rejected.
+
+### Approve large read-only inputs
+
+Checkpoints and datasets do not belong in the small source bundle or inline text fields. The host operator approves a dedicated directory in the same record store used for execution:
+
+```sh
+.venv-linux/bin/arl input register /path/to/pinned/checkpoint --name checkpoint
+.venv-linux/bin/arl input list
+.venv-linux/bin/arl input show INPUT_ID
+.venv-linux/bin/arl input verify INPUT_ID
+```
+
+Replace `INPUT_ID` with the returned `input_…` identifier. Add `"inputs": {"model": "INPUT_ID"}` to an experiment manifest or research brief. The dashboard accepts the same alias-to-ID map under **Sources and resource limits → Registered read-only inputs**. Aliases must be lowercase slugs; up to 16 bindings are allowed.
+
+Registration records every file's SHA-256 and size plus a directory-inventory hash, without copying the files into the source snapshot. Before launch, the worker checks that Podman's rootless namespace sees the same directories as the host, rehashes their contents, and mounts them read-only at `/inputs/model`; `ARL_INPUTS` supplies the alias-to-container-path map. Different content requires a new registration. Links, special files, paths containing the record store, and IDs from another store are rejected. Register only directories whose entire contents may be exposed to the experiment.
+
+Generated implementations cannot register host paths or add, remove, rename, or replace the brief's approved bindings. Only those directories are mounted—not their parent drive, credentials, or unrelated checkpoints. Large-file verification reads all approved bytes and can take substantial time on an HDD.
+
+This is a read-only **container mount**, not an immutable host filesystem: the trusted host operator must preserve directories while registering, verifying, and executing them. The runner does not prevent another host process from changing them.
 
 ## Run an experiment
 
@@ -72,6 +91,35 @@ TMPDIR="$PWD/.arl-cache/images" podman build --tmpdir "$PWD/.arl-cache/images" -
 The UUID above identifies this project's allocated RTX PRO 6000, not a portable device identifier. Configure your allocated device explicitly on another worker. CPU-only experiments do not need `--gpu`. `examples/cuda/reduction.json` is a second, numerical-order study. Both examples use the CUDA Driver API directly; the image contains Python, not PyTorch or a CUDA compiler.
 
 `arl stop ATTEMPT_ID --wait` terminates owned work and retains its records. `arl recover --wait` reconciles existing containers after interruption; it does not blindly repeat experiments. `arl list --attempts`, `arl show`, and `arl events` expose the history.
+
+### Pinned large-model runtime
+
+`Containerfile.inference` supplies the study's digest-pinned vLLM/PyTorch image. This changes the **experiment runtime**, not the Codex research-agent provider.
+
+```sh
+mkdir -p .arl-cache/images
+TMPDIR="$PWD/.arl-cache/images" podman build --network=none \
+  -f Containerfile.inference -t localhost/arl-inference:qwen38-v0.27.1 .
+podman create --name arl-inference-image-prepare --pull=never \
+  --userns=keep-id --user "$(id -u):$(id -g)" --network=none \
+  --read-only --read-only-tmpfs=false --cap-drop=ALL --security-opt=no-new-privileges \
+  --image-volume=ignore --entrypoint=python3 \
+  localhost/arl-inference:qwen38-v0.27.1 --version
+podman start --attach arl-inference-image-prepare
+podman rm --volumes arl-inference-image-prepare
+.venv-linux/bin/arl configure --image IMAGE_ID \
+  --gpu GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309 --gpu-mode wsl
+```
+
+Use the full immutable image ID printed by the build in place of `IMAGE_ID`. The one-time `create` prepares the image for the worker's non-root user mapping; a large image can take longer than the worker's 60-second container-creation deadline. Complete provisioning before starting experiments. Do not run the container regression suite concurrently with image pulls or this initial preparation: Podman can hold shared storage locks during them.
+
+Experiments still have no outbound network. Mount already-staged checkpoints through registered inputs, use a multiprocessing main guard where required, and put caches and scratch files under `/workspace`. Cache files count toward the output allowance, and private shared memory counts toward the memory limit. Specify model-appropriate limits rather than assuming the generic 2 GiB / 120-second research defaults will fit.
+
+The inference image uses [Linux abstract IPC sockets](https://libzmq.readthedocs.io/en/latest/zmq_ipc.html) for vLLM's process communication. They stay inside the container's private network namespace and do not require Unix socket files on the Windows-backed workspace.
+
+The worker explicitly mounts a private, non-executable `/dev/shm` for multiprocessing locks and shared memory. Its capacity is bounded by the experiment's memory allowance and charged to the same memory cgroup; it is not persistent artifact storage. The root filesystem, `/tmp`, and `/run` remain read-only.
+
+For large inputs, prefer `arl run EXPERIMENT_ID` followed by `arl wait ATTEMPT_ID --timeout SECONDS` with an explicit client wait. Content verification happens before the container starts; the default client wait of the experiment's wall limit plus 90 seconds may expire during lengthy preparation. A client timeout does not cancel or authorize resubmitting the recorded attempt.
 
 ### Enforced boundaries and limits
 
@@ -151,6 +199,8 @@ Save a brief such as this as `brief.json`, replacing `CODEX_MODEL_ID` with an ID
 
 Optional `sources` is a list of public HTTPS URLs. Optional `data_files` maps relative filenames to approved UTF-8 text, not host paths; at most 16 files and 256 KiB total. These inputs become read-only files under `/experiment/code/data/`.
 
+Optional `inputs` maps aliases to host-approved input IDs, as described above; it is separate from inline `data_files`. A checkpoint is available at `/inputs/<alias>`, not at its original host path.
+
 ```sh
 .venv-linux/bin/arl program create brief.json
 .venv-linux/bin/arl program start PROGRAM_ID --wait
@@ -166,14 +216,14 @@ Replace `PROGRAM_ID` with the returned ID. Omit `--wait` to launch a detached co
 
 ### What the coordinator enforces
 
-- Designs stay within the brief's resource permissions. Implementations cannot change the selected question or procedure or replace approved data.
+- Designs stay within the brief's resource permissions. Implementations cannot change the selected question or procedure, replace approved inline data, or change approved large-input bindings.
 - Adaptive follow-ups cite a prior analysis or execution and explain the connection. Questions retain parent links, status changes, and supporting evidence.
 - Failed executions, repairs, and planning calls consume their allowances. `max_experiments` counts execution attempts, including failures, not just successful studies.
 - Pause stops new scheduling and lets an active experiment finish. Stop requests termination of owned execution and keeps available outputs. Recovery reconciles recorded work instead of blindly repeating it.
 - Interrupted or invalid model requests remain recorded. Explicit resume permits a new, separately charged request; unavailable usage is marked unknown.
 - Reports separate recorded measurements from model-authored interpretations. Reaching a budget is a stopping reason, not a scientific finding.
 
-Source retrieval supports public HTTPS text/HTML and Crossref metadata or abstracts, not arbitrary downloads or PDF reading. Excerpts and truncated responses are marked. The generated runtime is Python's standard library plus the optional CUDA Driver API; arbitrary dependencies are not installed.
+Source retrieval supports public HTTPS text/HTML and Crossref metadata or abstracts, not arbitrary downloads or PDF reading. Excerpts and truncated responses are marked. Generated code uses the selected image's declared runtime packages; optional packages are not assumed when an image has no `org.autonomous-research-lab.runtime` label. The basic `Containerfile` provides Python's standard library and optional CUDA Driver API access. Arbitrary dependencies are not installed during an experiment.
 
 Accounting retains call counts, known provider token usage, execution attempts, measured wall time, and available CPU/memory observations. Unknown runtime is charged at its reservation. It does not infer complete GPU utilization, energy, monetary billing, or a hard total-dollar limit.
 

@@ -168,6 +168,18 @@ def prepare(store: Store, attempt: dict, spec: ExperimentSpec) -> dict:
         raise LabError(f"Requested resource limits cannot be enforced: missing delegated cgroup controllers {sorted(needed - controllers)}. No host settings were changed.")
     config = configuration(store)
     image = json.loads(podman("image", "inspect", config["image"]))[0]
+    inputs = store.resolve_inputs(spec.inputs)
+    if inputs:
+        sources = [store.input_source(value["id"]) for value in inputs.values()]
+        expected = [(meta.st_dev, meta.st_ino) for meta in map(Path.stat, sources)]
+        try:
+            visible = podman("unshare", "stat", "--printf=%d %i\\n", "--", *map(str, sources))
+            observed = [tuple(map(int, line.split())) for line in visible.splitlines()]
+        except (LabError, ValueError) as exc:
+            raise LabError("Podman's rootless mount namespace cannot access the approved inputs. Check drive visibility; refresh an inactive namespace with 'podman system migrate' only after checking for running containers.") from exc
+        if observed != expected:
+            raise LabError("Podman sees different directories than the approved host inputs. Fix rootless mount visibility before execution; no input was substituted.")
+        inputs = store.resolve_inputs(spec.inputs, verify=True)
     gpu_device = None
     isolation = None
     gpu_hardware = None
@@ -198,6 +210,9 @@ def prepare(store: Store, attempt: dict, spec: ExperimentSpec) -> dict:
     return {"backend": "podman-rootless", "image_reference": config["image"], "image_id": image["Id"],
             "image_digests": image.get("RepoDigests", []), "gpu_uuid": attempt["gpu_uuid"],
             "gpu_device": gpu_device, "gpu_isolation": isolation, "limits": spec.limits.to_dict(),
+            "inputs": inputs,
+            "runtime_description": (image.get("Config", {}).get("Labels") or {}).get(
+                "org.autonomous-research-lab.runtime", "Python standard library; optional packages have not been declared."),
             "driver_mounts": ["/usr/lib/wsl/lib", "/usr/lib/wsl/drivers"] if gpu_device == "/dev/dxg" else [],
             "hardware": {"logical_cpus": os.cpu_count(),
                          "host_memory_bytes": os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
@@ -221,6 +236,7 @@ def create_container(store: Store, attempt: dict, spec: ExperimentSpec, executio
             "--user", f"{os.getuid()}:{os.getgid()}", "--pid=private", "--ipc=private",
             "--init", "--no-healthcheck", "--systemd=false", "--restart=no", "--image-volume=ignore",
             "--memory", str(spec.limits.memory_bytes), "--memory-swap", str(spec.limits.memory_bytes),
+            "--tmpfs", f"/dev/shm:rw,nosuid,nodev,noexec,size={spec.limits.memory_bytes},mode=1777",
             "--pids-limit", str(spec.limits.pids), "--timeout", str(spec.limits.wall_seconds),
             "--stop-timeout=1", "--ulimit", f"fsize={spec.limits.output_bytes}:{spec.limits.output_bytes}",
             "--log-driver=k8s-file", "--log-opt", f"path={folder / 'console.log'}",
@@ -228,9 +244,20 @@ def create_container(store: Store, attempt: dict, spec: ExperimentSpec, executio
             "--volume", f"{bundle}:/experiment:ro", "--volume", f"{folder / 'output'}:/workspace:rw",
             "--env=ARL_OUTPUT_DIR=/workspace", "--env=ARL_SETTINGS=/experiment/settings.json",
             "--env=PYTHONDONTWRITEBYTECODE=1", "--env=PYTHONUNBUFFERED=1", "--env=HOME=/workspace",
-            "--env=CUDA_CACHE_DISABLE=1", "--env=PYTHONPATH=/experiment/code", "--entrypoint=python3"]
+            "--env=CUDA_CACHE_DISABLE=1", "--env=PYTHONPATH=/experiment/code",
+            "--env=TMPDIR=/workspace", "--env=XDG_CACHE_HOME=/workspace/.cache",
+            "--env=HF_HOME=/workspace/.cache/huggingface", "--env=HF_HUB_OFFLINE=1", "--env=TRANSFORMERS_OFFLINE=1",
+            "--env=TORCHINDUCTOR_CACHE_DIR=/workspace/.cache/torchinductor", "--env=TRITON_CACHE_DIR=/workspace/.cache/triton",
+            "--env=VLLM_CACHE_ROOT=/workspace/.cache/vllm",
+            "--env", "ARL_INPUTS=" + canonical_json({alias: value["path"] for alias, value in execution["inputs"].items()}),
+            "--entrypoint=python3"]
     if spec.limits.cpus is not None:
         args += ["--cpus", str(spec.limits.cpus)]
+    for alias, value in execution["inputs"].items():
+        source = str(store.input_source(value["id"]))
+        if any(char in source for char in ":,\n\r"):
+            raise LabError("Input mount paths cannot contain colon, comma, or newline characters")
+        args += ["--mount", f"type=bind,src={source},dst={value['path']},ro"]
     if execution["gpu_device"]:
         args += ["--device", execution["gpu_device"], "--env", f"CUDA_VISIBLE_DEVICES={attempt['gpu_uuid']}"]
         if execution["gpu_device"] == "/dev/dxg":

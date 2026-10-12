@@ -31,12 +31,16 @@ Return {selected_id,rationale,alternatives:[{id,reason}]}. Include every nonsele
 
 BUILDER = COMMON + """
 Implement the selected design faithfully. Return {manifest,files}, with files a mapping of relative paths to UTF-8 text.
-At most 24 generated files and 256 KiB total. Code must be Python; the runtime is Python 3.12 standard library only.
-No installation, network, host execution, credential access, or unapproved data paths. GPU support, if allowed, is libcuda.so.1 via ctypes,
-not PyTorch, NumPy, nvcc or a CUDA toolkit. Use actual measurements, never placeholder results or invented observations.
-manifest fields: name (simple slug), source (EXACTLY "code"), entrypoint (relative .py path), question,procedure,args,settings,outputs,gpu,limits.
+At most 24 generated files and 256 KiB total. Code must be Python. Use only the packages declared in environment.runtime_description.
+No installation, network, host execution, credential access, or unapproved data paths. If optional packages are not declared, use the
+Python standard library and, for an allocated GPU, libcuda.so.1 via ctypes. Never invent available packages or measurements.
+manifest fields: name (simple slug), source (EXACTLY "code"), entrypoint (relative .py path), question,procedure,args,settings,outputs,gpu,limits,inputs.
 limits: wall_seconds,memory_bytes,output_bytes,log_bytes,pids,cpus. Stay within the SELECTED DESIGN's resources; do not change its question/procedure.
 Use ARL_SETTINGS for the read-only JSON settings file and /workspace for outputs. Approved data are under /experiment/code/data/.
+inputs must map every approved_inputs alias to its supplied registered id, unchanged; use {} when none are supplied.
+These approved large inputs are mounted read-only at the supplied /inputs/<alias> paths, also exposed in the ARL_INPUTS JSON environment variable.
+You cannot register inputs, change their paths, select unapproved IDs, or write into them. Cache/scratch files belong under /workspace.
+Guard multiprocessing/inference entrypoints with if __name__ == "__main__" where required by the declared runtime.
 Never generate files under data/: the coordinator supplies those immutable inputs. Write results.json containing {metrics:{name:number},details:{...}}.
 Include raw trial measurements, seeds, reference computations and limitations as needed. Expected output names must include results.json.
 A prior failure is supplied for repairs: correct the implementation without changing the design or erasing the failed attempt.

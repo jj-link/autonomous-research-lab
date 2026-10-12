@@ -34,6 +34,17 @@ findmnt --mountpoint /mnt/d --output TARGET,SOURCE,FSTYPE,OPTIONS
 
 On this workstation, `workbench` successfully created, flushed, and reread a probe under the model root; Windows read the same file through `D:`. The probe was then removed. This verifies current access, not persistence after a restart or container access to model files.
 
+Rootless Podman must also see the drive. A namespace created before the HDD was mounted can retain an older mount view even when host reads succeed. Check `podman unshare findmnt --mountpoint /mnt/d --output SOURCE,TARGET`. If the drive is missing there, first check `podman ps`: with **no running containers**, `podman system migrate` refreshes the inactive namespace, after which the mount check must show `D:`. Do not run that command against unrelated active workloads; [Podman's documentation](https://docs.podman.io/en/v5.4.0/markdown/podman-system-migrate.1.html) states that it stops running containers as well as the pause process. The worker checks directory identity across the host and rootless namespace and refuses mismatches; it never performs this refresh automatically.
+
+The study's host-side staging command downloads one selected revision and registers its content in the current `.arl` store:
+
+```sh
+uv pip install --python .venv-linux/bin/python -e '.[model-download]'
+.venv-linux/bin/python research/qwen38-nvfp4/stage_checkpoint.py nvidia
+```
+
+Accepted labels are `bf16`, `unsloth`, `nvidia`, `radixark`, and `quasar`. The script requires the actual `D:` mount, uses public unauthenticated Hub requests and ordinary local files, verifies Git blob IDs and LFS SHA-256 hashes, and records the registered input ID in `.arl/studies/qwen38-nvfp4/staged.json`. It does not install packages into experiments or give generated code download access. A repeat invocation verifies the existing registration rather than replacing it. Use `--root` when preparing a different research store; approvals are store-specific.
+
 ## Checkpoints and provenance
 
 The full immutable revisions and metadata sources are in [inputs.lock.json](inputs.lock.json). Do not substitute a later `main` revision or a similarly named repository during execution.
@@ -115,15 +126,27 @@ Examples of justified choices:
 
 The selected follow-up cites the initial measurements and acknowledges alternative explanations. If none is feasible within the allocation, retain the candidates and stop with an explicit reason; do not substitute an unrelated toy experiment.
 
+## Verified runtime compatibility
+
+On 2026-10-12, experiment `exp_595059e6841b4cc0801f762eec1ea504`, attempt `run_caf1332d8e014809a27dadfce145bbd5`, completed with exit code 0. It loaded the pinned NVIDIA checkpoint from the approved read-only HDD directory and generated `READY` for “Reply with exactly the uppercase word READY and nothing else.” The retained `generation.json` records token IDs `[44061, 248046]` and finish reason `stop`; `results.json` records the runtime, selected GPU, settings, and timings.
+
+The check used vLLM 0.27.1 with BF16 computation, one GPU, eager execution, no prefix caching, a configured 32,768-token context, temperature 0, thinking disabled, and a 64-token output allowance. It did **not** exercise a full-length context or the primary evaluation's thinking/sampling settings. Networking was disabled and opening the checkpoint configuration for writing was rejected.
+
+The attempt allowed 26 GiB host memory, 512 processes, 8 GiB output/cache storage, 32 MiB logs, and 1,800 seconds of container execution, without a CPU quota. Observed peak cgroup memory was 12,879,024,128 bytes; retained outputs and caches totaled 49,332,489 bytes. Model initialization took 1,133.045 seconds and the first generation call took 94.986 seconds. These cold-start observations include initialization/compilation effects and are **not** steady-state throughput measurements or reservations established for the other checkpoints.
+
+Earlier failed attempts remain in the local record: stale rootless drive visibility, initial image user-mapping preparation exceeding the startup deadline, Windows-filesystem socket incompatibility, and read-only shared memory. The final runtime uses filesystem-independent abstract IPC and private writable shared memory while retaining a read-only root filesystem.
+
+This is a one-request infrastructure check, not a benchmark result. No claim about relative quantization quality follows from it.
+
 ## Launch requirements and completion criteria
 
-The storage and design milestone does not launch this study. The existing `arl` runtime is Python's standard library with optional CUDA Driver API access, not vLLM/PyTorch. Its worker mounts the small source bundle and output directory, not the model store. The brief schema currently accepts only small inline UTF-8 data files. Putting host model paths into those fields would not make the checkpoints accessible.
+The worker now accepts host-approved, read-only large inputs through `inputs` bindings, and `Containerfile.inference` pins the vLLM/PyTorch environment. The input inventory records the built image, package/CUDA versions, staged NVIDIA checkpoint inventory, and successful compatibility attempt. The [runtime setup instructions](../../README.md#pinned-large-model-runtime) cover initial user-mapping preparation and offline execution.
 
-Before submitting a runnable program, the implementation must provide:
+Before submitting the full comparison as a runnable program, the remaining requirements are:
 
-1. A pinned, GPU-compatible inference environment and a separate isolated grading path, exercised on the reserved compatibility items without inspecting primary results.
-2. Approved, read-only large-input mounts for checkpoint snapshots and public problem inputs; hidden grading data and credentials remain outside the model-serving environment. No unrestricted experiment networking or model-controlled host paths.
-3. Explicit downloads of the pinned snapshots into the verified HDD mount, file-integrity records, dataset/scorer staging under applicable terms, and a frozen task manifest. Never infer downloaded or validated weights from a successful metadata request.
+1. Exercise checkpoint inference for all five candidates and a separate isolated grading path on the reserved compatibility items, without inspecting primary results. A package/GPU probe alone does not satisfy this.
+2. Bind only approved checkpoint snapshots and public problem inputs. Keep hidden grading data and credentials outside the model-serving environment; large-input support does not authorize unrestricted experiment networking or model-controlled host paths.
+3. Stage the remaining pinned snapshots, datasets, and scorers under applicable terms, retain file-integrity records, and freeze the task manifest. Never infer downloaded or validated weights from a successful metadata request.
 4. Runtime-based memory/PID/storage/time reservations and persistent per-request records. No invented CPU quota, silent sample-count reduction, or unrecorded retries. If a budget cannot cover a matched block, stop before beginning that block.
 5. A coordinator brief that carries this protocol and input inventory to the Codex research agents, plus enough execution allowance for the initial comparison and one selected follow-up. The worker's attempt count is not the count of checkpoint candidates.
 
