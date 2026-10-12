@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import time
 import unittest
 from unittest.mock import patch
@@ -192,6 +193,38 @@ Path("/workspace/results.json").write_text(json.dumps({"metrics": {"input_read_o
         self.assertIn("deliberate failure", (self.store.attempt_dir(result["id"]) / "console.log").read_text())
         restored = Store(self.store.root).get_attempt(result["id"])
         self.assertEqual(restored["result"], result["result"])
+
+    def test_database_failure_cannot_leave_the_owned_container_running(self):
+        experiment = self.submit("import time\ntime.sleep(60)\n", wall_seconds=30)
+        attempt = self.store.create_attempt(experiment["id"])
+        get_attempt = self.store.get_attempt
+        update_attempt = self.store.update_attempt
+        unavailable = False
+
+        def read_record(*args, **kwargs):
+            if unavailable:
+                raise sqlite3.OperationalError("injected database failure")
+            return get_attempt(*args, **kwargs)
+
+        def write_record(*args, **kwargs):
+            nonlocal unavailable
+            if unavailable:
+                raise sqlite3.OperationalError("injected database failure")
+            result = update_attempt(*args, **kwargs)
+            if kwargs.get("state") == "running":
+                unavailable = True
+                raise sqlite3.OperationalError("injected database failure")
+            return result
+
+        with patch.object(self.store, "get_attempt", side_effect=read_record), patch.object(
+            self.store, "update_attempt", side_effect=write_record
+        ):
+            with self.assertRaises(sqlite3.OperationalError):
+                supervise(self.store, attempt["id"])
+        self.assertFalse(inspect_owned(self.store, attempt["id"])["State"]["Running"])
+        recovered = recover(self.store, wait=True)
+        self.assertEqual(recovered[0]["id"], attempt["id"])
+        self.assertEqual(recovered[0]["state"], "failed")
 
     def test_wall_timeout_terminates_container(self):
         experiment = self.submit("import time\ntime.sleep(60)\n", wall_seconds=1)

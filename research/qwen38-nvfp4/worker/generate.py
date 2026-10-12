@@ -1,4 +1,4 @@
-"""One checkpoint, sixteen frozen compatibility prompts, no primary generation."""
+"""One checkpoint and seed over a complete frozen compatibility or primary split."""
 from __future__ import annotations
 
 from enum import Enum
@@ -50,24 +50,35 @@ def model_paths(model):
     return list(groups.values())
 
 
+class WorkerMetadata:
+    """Named worker RPC: no callable or pickle payload crosses the engine boundary."""
+
+    def arl_implementation_paths(self):
+        return model_paths(self.get_model())
+
+
 def save(name, value):
     Path("/workspace", name).write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
 
 def main():
     from transformers import AutoTokenizer
-    from vllm import LLM, SamplingParams
-    import torch
+    from vllm import LLM
 
     settings = json.loads(Path("/experiment/settings.json").read_text())
     frozen = json.loads(Path("/inputs/prompts/tasks.json").read_text(encoding="utf-8"))
     tasks = frozen["tasks"]
-    if frozen["split"] != "compatibility" or settings["seed"] != 17 or len(tasks) != 16:
-        raise ValueError("This worker is restricted to the frozen 16-item compatibility split at seed 17")
+    split, seed = settings["split"], settings["seed"]
+    if split not in {"compatibility", "primary"} or frozen["split"] != split:
+        raise ValueError("Requested split differs from the frozen input")
+    count = 8 if split == "compatibility" else 128
+    seeds = (17,) if split == "compatibility" else (17, 29, 43)
+    if type(seed) is not int or seed not in seeds or len(tasks) != 2 * count:
+        raise ValueError("Requested seed or task count differs from the protocol")
     if not frozen["thinking_enabled"] or frozen["reasoning_effort"] != "xhigh":
         raise ValueError("Unexpected thinking conditions")
-    if [row["family"] for row in tasks] != ["coding"] * 8 + ["ifeval"] * 8:
-        raise ValueError("Compatibility task families differ from the frozen protocol")
+    if [row["family"] for row in tasks] != ["coding"] * count + ["ifeval"] * count:
+        raise ValueError("Task families differ from the frozen protocol")
     tokenizer = AutoTokenizer.from_pretrained("/inputs/tokenizer", local_files_only=True, trust_remote_code=False)
     for task in tasks:
         encoded = json.dumps(task["prompt_token_ids"], separators=(",", ":")).encode("utf-8")
@@ -82,19 +93,31 @@ def main():
                    "tensor_parallel_size": 1, "max_num_seqs": 1, "max_num_batched_tokens": 4096,
                    "enable_chunked_prefill": True, "enable_prefix_caching": False, "speculative_config": None,
                    "enforce_eager": True, "cpu_offload_gb": 0, "offload_group_size": 0,
-                   "gpu_memory_utilization": 0.90, "seed": 17, "generation_config": "vllm",
+                   "gpu_memory_utilization": 0.90, "seed": seed, "generation_config": "vllm",
                    "load_format": "safetensors", "safetensors_load_strategy": "lazy",
-                   "limit_mm_per_prompt": {"image": 0, "video": 0}, "hf_token": False}
+                   "limit_mm_per_prompt": {"image": 0, "video": 0}, "hf_token": False,
+                   "worker_extension_cls": "generate.WorkerMetadata"}
     started = time.monotonic()
     llm = LLM(**engine_args)
     load_seconds = time.monotonic() - started
+    try:
+        run_requests(llm, tokenizer, frozen, settings, engine_args, load_seconds)
+    finally:
+        llm.llm_engine.engine_core.shutdown(timeout=30)
+
+
+def run_requests(llm, tokenizer, frozen, settings, engine_args, load_seconds):
+    from vllm import SamplingParams
+    import torch
+
+    tasks, seed = frozen["tasks"], settings["seed"]
     config = llm.llm_engine.vllm_config
     if config.cache_config.cache_dtype != "bfloat16" or config.cache_config.enable_prefix_caching or config.speculative_config is not None:
         raise ValueError("Actual cache or speculative decoding conditions differ from the protocol")
     if config.model_config.max_model_len != 32768 or config.scheduler_config.max_num_seqs != 1:
         raise ValueError("Actual context or concurrency differs from the protocol")
     runtime = {"engine_arguments": engine_args, "engine_config": str(config), "load_seconds": load_seconds,
-               "model_implementation_paths": llm.apply_model(model_paths),
+               "model_implementation_paths": llm.collective_rpc("arl_implementation_paths", timeout=60),
                "visible_gpu_uuid": os.environ.get("CUDA_VISIBLE_DEVICES"), "cuda_device_count": torch.cuda.device_count(),
                "gpu_name": torch.cuda.get_device_name(0), "gpu_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
                "kv_cache_dtype": config.cache_config.cache_dtype, "attention_config": str(config.attention_config),
@@ -112,13 +135,13 @@ def main():
         raise ValueError("Warm-up did not produce a normally terminated response; no compatibility requests were sent")
     sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
                 "presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0,
-                "max_tokens": 16384, "seed": 17, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
+                "max_tokens": 16384, "seed": seed, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
     errors = 0
     with Path("/workspace/generations.jsonl").open("x", encoding="utf-8") as destination:
         for task in tasks:
             row = {key: task[key] for key in ("id", "family", "dataset_id", "prompt_sha256", "rendered_prompt_sha256", "prompt_tokens_sha256")}
             row.update(checkpoint=settings["checkpoint"], repo_id=settings["repo_id"], revision=settings["revision"],
-                       seed=17, thinking_enabled=True, prompt_tokens=len(task["prompt_token_ids"]))
+                       seed=seed, thinking_enabled=True, prompt_tokens=len(task["prompt_token_ids"]))
             started = time.monotonic()
             try:
                 output = llm.generate([{"prompt_token_ids": task["prompt_token_ids"]}], SamplingParams(**sampling), use_tqdm=False)[0].outputs[0]
@@ -137,8 +160,8 @@ def main():
             print(json.dumps({"id": row["id"], "tokens": len(row["token_ids"]), "finish_reason": row["finish_reason"], "error": row["error"]}), flush=True)
     save("results.json", {"metrics": {"requested": len(tasks), "recorded": len(tasks), "generation_errors": errors,
                                        "load_seconds": load_seconds},
-                          "details": {"checkpoint": settings["checkpoint"], "split": "compatibility", "seed": 17,
-                                      "sampling": sampling, "quality_comparison_performed": False}})
+                          "details": {"checkpoint": settings["checkpoint"], "split": frozen["split"], "seed": seed,
+                                      "sampling": sampling}})
 
 
 if __name__ == "__main__":

@@ -149,7 +149,8 @@ def root_label(store: Store) -> str:
 
 
 def inspect_owned(store: Store, attempt_id: str) -> dict | None:
-    name = store.get_attempt(attempt_id).get("container_id") or container_name(attempt_id)
+    # The owned name is stable; failure cleanup must work even if SQLite is unavailable.
+    name = container_name(attempt_id)
     result = _podman_process("container", "inspect", name)
     if result.returncode:
         if "no such" in result.stderr.lower() or "does not exist" in result.stderr.lower():

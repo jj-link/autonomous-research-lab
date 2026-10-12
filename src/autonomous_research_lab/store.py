@@ -123,7 +123,8 @@ class Store:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1):
                 raise LabError(f"Unsupported record schema version: {version}")
-            connection.execute("PRAGMA journal_mode=WAL")
+            # Rollback journaling avoids WAL shared-memory locking on WSL/DrvFS.
+            connection.execute("PRAGMA journal_mode=DELETE")
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS experiments (
                     id TEXT PRIMARY KEY, created_at TEXT NOT NULL,

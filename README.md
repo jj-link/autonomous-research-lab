@@ -115,22 +115,23 @@ The worker explicitly mounts a private, non-executable `/dev/shm` for multiproce
 
 For large inputs, prefer `arl run EXPERIMENT_ID` followed by `arl wait ATTEMPT_ID --timeout SECONDS` with an explicit client wait. Content verification happens before the container starts; the default client wait of the experiment's wall limit plus 90 seconds may expire during lengthy preparation. A client timeout does not cancel or authorize resubmitting the recorded attempt.
 
-### Qwen3.8 comparison preparation
+### Qwen3.8 comparison
 
-The [study protocol](research/qwen38-nvfp4/brief.md) pins the five checkpoints, task selection, serving conditions, and scoring rules. Its host-side preparation commands run inside the existing WSL project and `.arl` store:
+The [study protocol](research/qwen38-nvfp4/brief.md) pins the five checkpoints, task selection, serving conditions, and scoring rules. Run these commands inside the existing WSL project and `.arl` store, after staging all five checkpoint labels with `stage_checkpoint.py`:
 
 ```sh
 .venv-linux/bin/python research/qwen38-nvfp4/provision_grader.py
 .venv-linux/bin/python research/qwen38-nvfp4/stage_tasks.py
 .venv-linux/bin/python research/qwen38-nvfp4/stage_tokenizers.py
 .venv-linux/bin/python research/qwen38-nvfp4/study.py freeze
-.venv-linux/bin/python research/qwen38-nvfp4/study.py generate nvidia
-.venv-linux/bin/python research/qwen38-nvfp4/study.py grade nvidia
+.venv-linux/bin/python research/qwen38-nvfp4/study.py run-all --series comparison
 ```
 
-Stage each checkpoint with `stage_checkpoint.py` before generating for its label; accepted labels are `bf16`, `unsloth`, `nvidia`, `radixark`, and `quasar`. Execute one checkpoint at a time. Do not launch duplicate invocations for the same study job. Repeating a completed/failed execution command reads its recorded immutable attempt rather than silently generating new answers.
+`run-all` completes and grades the reserved compatibility items for every checkpoint before allowing primary generation. It then executes the full fifteen checkpoint/seed blocks in the prescribed rotated order and produces `analysis.json` and `report.md` under `.arl/studies/qwen38-nvfp4/primary/<series>`. The primary time reservation is derived from measured compatibility throughput and saved in `cohort.json`; memory and generation settings remain common across checkpoints.
 
-Provisioning downloads public pinned scorer code, hash-locked dependencies, and sentence-tokenizer assets into a dedicated build context. Experiment containers remain offline. Dataset selection streams the raw files and retains only the ranked selection, separating public prompts from private grading data. `freeze` checks tokenizer identity and renders both splits before inference; the generation command is restricted to the sixteen compatibility items at seed 17, not the primary comparison.
+Provisioning downloads public pinned scorer code, hash-locked dependencies, and sentence-tokenizer assets into a dedicated build context. Experiment containers remain offline. Dataset selection streams the raw files and retains only the ranked selection, separating public prompts from private grading data. `freeze` checks tokenizer identity and renders both splits before inference.
+
+For an individual compatibility block, use `study.py generate LABEL --series comparison`, then `study.py grade LABEL --series comparison`; labels are `bf16`, `unsloth`, `nvidia`, `radixark`, and `quasar`. Primary blocks additionally require `--split primary --seed SEED`, and generation requires the exact `--wall-seconds` from the cohort plan. One controller owns a series at a time. Repeating a command resumes its recorded immutable attempt, never silently resubmitting a failure. Use a new explicit series for an amended rerun and retain the interrupted series. `study.py analyze --series comparison` recomputes analysis only after every requested primary response has retained scoring evidence.
 
 Receipts and attempt links are under `.arl/studies/qwen38-nvfp4`. The internal `grading-runner` store uses a CPU-only image without changing the dashboard's signed-in workspace or main inference runner. Each grader receives one response and that task's private tests, not checkpoints or credentials. Dataset contents stay in ignored local storage and must not be committed or redistributed as part of this study. Compatibility checks and synthetic scorer controls are not primary quality results.
 
