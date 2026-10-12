@@ -24,29 +24,7 @@
     "gpu_uuid": "GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309",
     "compute_capability": [12, 0],
     "worker_network": "none",
-    "package_and_gpu_probe_verified_on": "2026-10-12",
-    "ipc_transport": "ZeroMQ Linux abstract sockets; VLLM_RPC_BASE_PATH=@arl",
-    "verification_scope": "Package imports, allocated device identity, CUDA computation, cross-process abstract IPC, and the separately recorded NVIDIA checkpoint probe. These are not quality measurements.",
-    "checkpoint_probe": {
-      "verified_on": "2026-10-12",
-      "checkpoint": "nvidia",
-      "experiment_id": "exp_595059e6841b4cc0801f762eec1ea504",
-      "attempt_id": "run_caf1332d8e014809a27dadfce145bbd5",
-      "state": "completed",
-      "exit_code": 0,
-      "response": "READY",
-      "token_ids": [44061, 248046],
-      "finish_reason": "stop",
-      "generation_artifact_sha256": "17e2088438a92ebcee54a10e79841cf45a223debb35aefd4529f0b2aedae9999",
-      "results_artifact_sha256": "411ff105db574836b75eb0025dc9edc47bb024ff1495618db3117a6f7570358e",
-      "context_length_configured": 32768,
-      "thinking_enabled": false,
-      "load_seconds": 1133.0453557720175,
-      "first_generation_seconds": 94.98618945997441,
-      "peak_cgroup_memory_bytes": 12879024128,
-      "retained_output_bytes": 49332489,
-      "quality_comparison_performed": false
-    }
+    "ipc_transport": "ZeroMQ Linux abstract sockets; VLLM_RPC_BASE_PATH=@arl"
   },
   "grading_runtime": {
     "containerfile": "Containerfile.grading",
@@ -67,50 +45,16 @@
     "worker_network": "none",
     "gpu": false,
     "ifeval_evaluator_seed": 0,
-    "livecodebench_per_test_seconds": 6,
-    "verification": {
-      "verified_on": "2026-10-12",
-      "scope": "Nine synthetic controls after report-storage and WSL startup fixes, through the real offline CPU worker and official scorers; not checkpoint quality measurements.",
-      "controls_passed": 9,
-      "receipt": ".arl/studies/qwen38-nvfp4/grader-controls-path-fix/summary.json",
-      "earlier_control_directories": [
-        ".arl/studies/qwen38-nvfp4/grader-controls",
-        ".arl/studies/qwen38-nvfp4/grader-controls-report-v2"
-      ],
-      "retained_startup_failure": "run_b46c0aea3d0b487887fb623653cd016f",
-      "attempts": {
-        "stdin_right": "run_83e1b90a0cbd4a15afe31ddc855090fd",
-        "stdin_wrong": "run_ca971ee881e348319e0cf0c7947eef83",
-        "function_right": "run_a14c50515b384f43ae8aa9c47118058b",
-        "per_test_timeout": "run_c92caa8db37c4c9485830ba9189ac31c",
-        "child_exit": "run_7e580cdf1eb549b7aeef0aec7be916ad",
-        "whole_call_timeout": "run_44ab701caeb041e293dc27b2c8e49700",
-        "ifeval_right": "run_25718b197bd343b9b867a44c1241cafb",
-        "ifeval_wrong": "run_bb89c2175f534d0b97a3d8d4e4d3058c",
-        "ifeval_strict_loose": "run_9037fb5ebfd749cb9ad7806b58d4bdcf"
-      }
-    },
-    "large_report_verification": {
-      "failed_before_attempt_id": "run_2f3e7500496946e7b8da250008193ee7",
-      "passed_after_attempt_id": "run_6d3e00075d6b4b058a761978466ebd19",
-      "response_characters": 1100002,
-      "correct": 1,
-      "full_report_bytes": 1100967,
-      "full_report_sha256": "ea91111e90173aad2a3478d94ed2d6b258b14ee802818bcfcc75893469fa252a",
-      "storage": "Compact results.json with a hash-linked, untruncated grading.json artifact"
-    }
+    "livecodebench_per_test_seconds": 6
   },
   "task_inventory": {
-    "freeze_attempt_id": "run_92ca9a65062e432bbc35f755ab2d3e7f",
     "receipt": ".arl/studies/qwen38-nvfp4/frozen.json",
     "source_receipt": ".arl/studies/qwen38-nvfp4/tasks.json",
     "selection_namespace": "arl-qwen38-nvfp4-v1",
     "selection_rank": "sha256_utf8_then_dataset_id",
     "common_tokenizer": "bf16",
-    "token_identity_compatible": ["bf16", "unsloth", "nvidia", "radixark", "quasar"],
     "vocabulary_size": 248077,
     "vocabulary_sha256": "467543819daf0b32f85b6b8e9097aa1ac1675affa59836c26acbc4a22eb83f0f",
-    "frontend_defaults_differ": ["nvidia", "radixark"],
     "chat_template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
     "thinking_enabled": true,
     "reasoning_effort": "xhigh",
@@ -128,9 +72,7 @@
       "max_prompt_tokens": 2854,
       "rendered_file_sha256": "2b7057ac3e0b800133cf20508af7427d81278d44a72f5ed8320e3f37279f9b4c",
       "approved_inventory_sha256": "b1adb5311183f6b8557295d9d0d74104dec30f0f5557a3226e037ddb50dad00d"
-    },
-    "all_selected_prompts_fit_context_and_output_allowance": true,
-    "quality_comparison_performed": false
+    }
   },
   "model_storage": {
     "windows_root": "D:/models/huggingface",
@@ -150,8 +92,6 @@
       "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
       "role": "Original BF16 weight reference",
       "staged_input": {
-        "verified_on": "2026-10-12",
-        "worker_local_id": "input_f7a2c1aad0b34e089d908bc45b1d1743",
         "inventory_sha256": "d18d5f393c0fcbe2ef30b89760ce082a95d92bd2da8d3b40b967413825a050e7",
         "bytes": 55586126179,
         "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
@@ -164,8 +104,6 @@
       "revision": "f0b7c9e722f5565102fff8481c99e4d86ae099c7",
       "role": "Mixed-precision post-training quantization",
       "staged_input": {
-        "verified_on": "2026-10-12",
-        "worker_local_id": "input_0b9f6f8701bf487aa96b5ca4cff317c9",
         "inventory_sha256": "850a6d40a98bc42de04bce630e841b51f5c9afd20682360ac03ec142328386e2",
         "bytes": 23444515437,
         "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
@@ -178,12 +116,9 @@
       "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
       "role": "Mixed-precision Model Optimizer post-training quantization",
       "staged_input": {
-        "verified_on": "2026-10-12",
-        "worker_local_id": "input_7e3a4b39660d4f73b9cb340d33841f69",
         "inventory_sha256": "59639c1dedc070020b0adbc714e09d8635596e253481f8b9a183740ec068ceba",
         "bytes": 21945296812,
         "file_count": 60,
-        "publisher_files_verified": 19,
         "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
       },
       "metadata_source": "https://huggingface.co/api/models/nvidia/Qwen3.8-27B-NVFP4"
@@ -194,8 +129,6 @@
       "revision": "319f741cce68d7914884900c138a1fbb70a42f30",
       "role": "Mixed-precision Model Optimizer post-training quantization, NVFP4 output head",
       "staged_input": {
-        "verified_on": "2026-10-12",
-        "worker_local_id": "input_4eaf7ae302634dbebca6d802983ce362",
         "inventory_sha256": "0544d8028ee5249a3e1eb44cfab848221040a55aa35e34bf2d929a44c6d14636",
         "bytes": 21945300968,
         "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."
@@ -208,8 +141,6 @@
       "revision": "d9af17e20644c5b9a6d66dff1d14f349e2e61b05",
       "role": "Quantization-aware training; a released-build comparison, not a pure post-training conversion ablation",
       "staged_input": {
-        "verified_on": "2026-10-12",
-        "worker_local_id": "input_696bcde26a84450f9625a28fb4d43430",
         "inventory_sha256": "1de6b2715a639166ce511e2374273fd0ec32201c030bdfaa4f2ba6a63fccc5d7",
         "bytes": 20582490186,
         "inventory_scope": "Checkpoint files plus retained Hugging Face download metadata; this is a local directory inventory, not a parameter-only hash."

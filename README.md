@@ -23,19 +23,9 @@ The system will make routine research decisions within those limits. Users will 
 
 The research history will retain the designs, code, results, and reasons for subsequent decisions, so a user can follow how the investigation developed.
 
-## Current status
-
-The recorded runner, bounded research coordinator, controlled evaluation suite, and local browser interface are implemented. Two real CUDA experiments have run on the allocated RTX PRO 6000.
-
-The coordinator has also been exercised with scripted HTTP responses and real isolated executions: a failed implementation, a repair, analysis, an evidence-linked follow-up, and budget stopping. **That is software verification, not an autonomous language-model research demonstration.** Explicit Codex-account, Spark-cluster, and OpenAI-compatible providers are implemented. Spark discovery and a small real generation have passed. Codex's authentication lifecycle, protected storage, and streaming protocol have been exercised; browser sign-in and authenticated model discovery now work. Live Codex inference, live autonomous research, and matched-policy comparisons remain unverified.
-
 ## Selected research study
 
 The [Qwen3.8-27B NVFP4 comparison brief](research/qwen38-nvfp4/brief.md) defines a controlled comparison of four published NVFP4 builds against the original BF16 model: coding correctness, instruction following, completion failures, paired uncertainty estimates, and an evidence-selected follow-up. Its [input inventory](research/qwen38-nvfp4/inputs.lock.json) pins the checkpoint, dataset, and scorer revisions.
-
-All five pinned checkpoints are downloaded, checked against publisher file hashes, and registered on the existing HDD at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting it.
-
-NVIDIA's checkpoint has loaded through an approved read-only input and generated `READY` on the allocated RTX PRO 6000 with networking disabled. The task inventory is frozen, and the isolated official graders have passed real positive/negative controls. These [recorded checks](research/qwen38-nvfp4/brief.md#verified-runtime-compatibility) establish preparation and execution paths—not quantization quality. All-five checkpoint inference on the compatibility tasks and the primary comparison remain unverified.
 
 ## Record-store commands
 
@@ -279,7 +269,7 @@ Save the brief's `model` object alone as `model.json`, then use:
 
 `--prepare-only` creates records without model calls. `--compare` runs `fixed_plan`, `direct`, and `candidate_comparison` with the same data, model, tools, and budget ceilings. Planning and failed attempts remain charged. Comparison stops if a program is interrupted or blocked.
 
-Dataset preparation and scoring have been exercised for all five cases. **Cloud-agent policy comparisons have not been run.** Numerical scores do not assess every scientific claim: unsupported causality, generality, evidence dependence, and whether follow-ups answer the question still require external review. Repeat across seeds before drawing comparative conclusions.
+Numerical scores do not assess every scientific claim: unsupported causality, generality, evidence dependence, and whether follow-ups answer the question still require external review. Repeat across seeds before drawing comparative conclusions.
 
 ## Verification
 

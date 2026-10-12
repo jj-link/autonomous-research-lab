@@ -8,9 +8,9 @@ The result should help choose a checkpoint for a workload, with uncertainty and 
 
 This is a comparison of published builds. Their retained precision, calibration, and additional training differ. QUASAR uses quantization-aware training. A difference between releases therefore does not, by itself, establish which quantization technique caused it.
 
-## Status and scope
+## Scope
 
-This document is the research design, not a benchmark result or an executable `arl program create` manifest. The NVIDIA checkpoint has been downloaded, verified, and used for the readiness probe recorded below. The other four checkpoints are being staged. No primary evaluation has run. The input revisions in [inputs.lock.json](inputs.lock.json) were obtained from the publishers' metadata on 2026-10-11.
+This document defines the research design, not results or an executable `arl program create` manifest. [inputs.lock.json](inputs.lock.json) pins the inputs and runtime dependencies.
 
 The first comparison is text-only: coding correctness and verifiable instruction following, with completion failures recorded for both. Vision, throughput rankings, retraining, and broad comparisons against other model families are outside this first comparison. Long-context and multi-turn behavior are eligible follow-ups, not properties the initial single-turn evaluation will establish.
 
@@ -25,14 +25,12 @@ The first comparison is text-only: coding correctness and verifiable instruction
 - GPU allocation does not imply a CPU quota or a host-RAM limit. Do not apply the current generic worker defaults of 2 GiB RAM and 120 seconds to a model-serving job. Determine job reservations from the actual runtime's measured requirements before launching the comparison.
 - At setup, WSL reported 33,787,092,992 bytes of host RAM. GPU memory is a separate allocation. Check the loader's peak host-memory use and shard-at-a-time loading before attempting BF16; do not assume the full checkpoint can be materialized in host RAM or change WSL's memory allocation without authorization.
 
-The drive was mounted without changing `/etc/fstab` or restarting WSL. WSL's automount configuration was left unchanged. Before any download, require an actual `/mnt/d` mount whose source is `D:`; directory existence alone is insufficient. If it is absent, stop rather than writing models into the underlying WSL filesystem. The existing drive can be mounted with:
+Before any download, require an actual `/mnt/d` mount whose source is `D:`; directory existence alone is insufficient. If it is absent, stop rather than writing models into the underlying WSL filesystem. The existing drive can be mounted with:
 
 ```sh
 sudo mount -t drvfs D: /mnt/d -o uid=1000,gid=1000,noatime
 findmnt --mountpoint /mnt/d --output TARGET,SOURCE,FSTYPE,OPTIONS
 ```
-
-On this workstation, `workbench` successfully created, flushed, and reread a probe under the model root; Windows read the same file through `D:`. The probe was then removed. This verifies current access, not persistence after a restart or container access to model files.
 
 Rootless Podman must also see the drive. A namespace created before the HDD was mounted can retain an older mount view even when host reads succeed. Check `podman unshare findmnt --mountpoint /mnt/d --output SOURCE,TARGET`. If the drive is missing there, first check `podman ps`: with **no running containers**, `podman system migrate` refreshes the inactive namespace, after which the mount check must show `D:`. Do not run that command against unrelated active workloads; [Podman's documentation](https://docs.podman.io/en/v5.4.0/markdown/podman-system-migrate.1.html) states that it stops running containers as well as the pause process. The worker checks directory identity across the host and rootless namespace and refuses mismatches; it never performs this refresh automatically.
 
@@ -83,7 +81,7 @@ The dataset and scorer revisions are pinned in the input inventory. Both dataset
 ### Controlled serving and generation
 
 - Use one validated inference-engine build and dependency set for all five checkpoints, recording its immutable image digest, CUDA/driver versions, GPU identity, attention backend, and actual quantization kernel paths. Different weight formats can select different kernels even in the same engine; retain that distinction in interpretation.
-- Use the pinned vLLM build for all five checkpoints. The NVIDIA readiness probe succeeded; common-settings compatibility across the full cohort remains to be checked. Do not quietly use a different engine or version for a troublesome candidate.
+- Use the pinned vLLM build for all five checkpoints. Do not quietly use a different engine or version for a troublesome candidate.
 - Start with a 32,768-token context window, explicit BF16 KV cache, one concurrent request, MTP/speculative decoding disabled, and prefix caching disabled. No engine-selected per-checkpoint cache precision or offload fallback.
 - Use the pinned original model's tokenizer and chat template only after verifying the complete token-to-ID map, added-token contents/special flags, and model token configuration for every candidate. Publisher frontend defaults (including padding choice) are recorded separately and normalized by this common tokenizer; they are not token-ID identity. Render identical inputs, with thinking enabled and `reasoning_effort=xhigh`. A vocabulary or backend special-token mismatch blocks the controlled comparison; do not disguise it as a weight-quality difference.
 - Fix `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0`, `presence_penalty=0`, and `repetition_penalty=1`. Allow 16,384 generated tokens per response, including reasoning, for every candidate and both task families. Inputs that cannot fit without truncation must be identified before evaluating any candidate.
@@ -135,49 +133,9 @@ Examples of justified choices:
 
 The selected follow-up cites the initial measurements and acknowledges alternative explanations. If none is feasible within the allocation, retain the candidates and stop with an explicit reason; do not substitute an unrelated toy experiment.
 
-## Verified runtime compatibility
-
-On 2026-10-12, experiment `exp_595059e6841b4cc0801f762eec1ea504`, attempt `run_caf1332d8e014809a27dadfce145bbd5`, completed with exit code 0. It loaded the pinned NVIDIA checkpoint from the approved read-only HDD directory and generated `READY` for “Reply with exactly the uppercase word READY and nothing else.” The retained `generation.json` records token IDs `[44061, 248046]` and finish reason `stop`; `results.json` records the runtime, selected GPU, settings, and timings.
-
-The check used vLLM 0.27.1 with BF16 computation, one GPU, eager execution, no prefix caching, a configured 32,768-token context, temperature 0, thinking disabled, and a 64-token output allowance. It did **not** exercise a full-length context or the primary evaluation's thinking/sampling settings. Networking was disabled and opening the checkpoint configuration for writing was rejected.
-
-The attempt allowed 26 GiB host memory, 512 processes, 8 GiB output/cache storage, 32 MiB logs, and 1,800 seconds of container execution, without a CPU quota. Observed peak cgroup memory was 12,879,024,128 bytes; retained outputs and caches totaled 49,332,489 bytes. Model initialization took 1,133.045 seconds and the first generation call took 94.986 seconds. These cold-start observations include initialization/compilation effects and are **not** steady-state throughput measurements or reservations established for the other checkpoints.
-
-Earlier failed attempts remain in the local record: stale rootless drive visibility, initial image user-mapping preparation exceeding the startup deadline, Windows-filesystem socket incompatibility, and read-only shared memory. The final runtime uses filesystem-independent abstract IPC and private writable shared memory while retaining a read-only root filesystem.
-
-This is a one-request infrastructure check, not a benchmark result. No claim about relative quantization quality follows from it.
-
-The separate grading image passed nine synthetic controls through real offline CPU-only worker containers on 2026-10-12: correct/incorrect stdin solutions, a correct function solution, per-test timeout, abnormal child exit, whole-call timeout, passing/failing IFEval responses, and a response that passes loose but fails strict IFEval. The IFEval controls exercised sentence tokenization and language detection without downloads. All nine passed again after the report-storage and worker-startup fixes below. Image/dependency pins and current attempt IDs are recorded in `inputs.lock.json`; detailed records are under `.arl/studies/qwen38-nvfp4/grader-controls-path-fix` and the internal `grading-runner` store. Earlier control series, including interrupted attempts, are retained. These establish the scoring path, not checkpoint quality.
-
-A valid 1,100,002-character IFEval answer exposed the worker's 1 MiB `results.json` observation limit (`run_2f3e7500496946e7b8da250008193ee7`, retained as failed). The adapter now writes a compact summary plus the complete answer and scorer evidence in hash-linked `grading.json`. The same positive control completed after the fix (`run_6d3e00075d6b4b058a761978466ebd19`), scored correct, and preserved the full answer. No response truncation or reduced allowance was used to avoid the limit.
-
-A later control attempt (`run_b46c0aea3d0b487887fb623653cd016f`) failed during Podman inspection. Debug tracing isolated repeated searches of inherited Windows PATH directories for absent optional OCI runtimes. The worker now filters those directories only in Podman's child environment, preserving the parent's Windows credential helpers. The failed series was retained; a separately recorded full nine-control series passed after the fix. Container and client timeouts were not increased.
-
-Tokenizer inspection `run_58b4c15a920f4777af613be68068ad4b` verified that all five releases share 248,077 vocabulary entries, the same added-token definitions/special flags, and the same model token configuration. The vocabulary-map SHA-256 is `467543819daf0b32f85b6b8e9097aa1ac1675affa59836c26acbc4a22eb83f0f`. Their frontend defaults are not identical:
-
-| Releases | Native padding token ID |
-|---|---:|
-| BF16, Unsloth, QUASAR | 248044 |
-| NVIDIA, RadixArk | 248046 |
-
-The comparison deliberately uses the original tokenizer for every release, without editing checkpoint files. The initial overly strict frontend-equality probe (`run_3f934c8361af474e9ef358a2e6c4097c`) remains recorded as failed; the follow-up inspection distinguished configurable defaults from token identity. This does not establish inference compatibility or model quality.
-
-### Frozen task inventory
-
-Production freeze attempt `run_92ca9a65062e432bbc35f755ab2d3e7f` completed before any benchmark generation. It verified token identity across all five releases, then rendered both disjoint task sets with the original tokenizer, thinking enabled, and `reasoning_effort="xhigh"`.
-
-| Split | Items per family | Total items | Largest prompt, tokens |
-|---|---:|---:|---:|
-| Compatibility | 8 | 16 | 1193 |
-| Primary comparison | 128 | 256 | 2854 |
-
-Every selected prompt fits the 32,768-token context with the full 16,384-token output allowance; none was dropped or truncated. The approved public inputs contain the exact messages, rendered prompts, token IDs, and hashes. Private grading data is registered separately and is not mounted for generation. `inputs.lock.json` records the rendered-file and approved-inventory hashes; the local `tasks.json` and `frozen.json` receipts retain dataset-file integrity records and the selected IDs. This validates preparation, not model answers.
-
 ## Launch requirements and completion criteria
 
-All five pinned weight snapshots have been downloaded to the verified HDD mount, checked against publisher file hashes, and registered as approved read-only inputs. `inputs.lock.json` records their local IDs, directory-inventory hashes, and byte counts; `.arl/studies/qwen38-nvfp4/staged.json` retains the host receipt. The directory hashes include Hugging Face download metadata and are not parameter-only hashes. This establishes staged inputs, not inference compatibility for every checkpoint. The [runtime setup instructions](../../README.md#pinned-large-model-runtime) cover initial user-mapping preparation and offline execution.
-
-Before submitting the full comparison as a runnable program, the remaining requirements are:
+Before launching the full comparison:
 
 1. Exercise checkpoint inference for all five candidates and a separate isolated grading path on the reserved compatibility items, without inspecting primary results. A package/GPU probe alone does not satisfy this.
 2. Bind only approved checkpoint snapshots and public problem inputs. Keep hidden grading data and credentials outside the model-serving environment; large-input support does not authorize unrestricted experiment networking or model-controlled host paths.
