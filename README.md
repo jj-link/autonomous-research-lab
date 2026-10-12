@@ -27,7 +27,13 @@ The research history will retain the designs, code, results, and reasons for sub
 
 The recorded runner, bounded research coordinator, controlled evaluation suite, and local browser interface are implemented. Two real CUDA experiments have run on the allocated RTX PRO 6000.
 
-The coordinator has also been exercised with scripted HTTP responses and real isolated executions: a failed implementation, a repair, analysis, an evidence-linked follow-up, and budget stopping. **That is software verification, not an autonomous language-model research demonstration.** Explicit Codex-account, Spark-cluster, and OpenAI-compatible providers are implemented. Spark discovery and a small real generation have passed; Codex's authentication lifecycle, protected storage, and streaming protocol have been exercised, but live Codex inference still requires this app's independent account sign-in. Live autonomous research and matched-policy comparisons remain unverified.
+The coordinator has also been exercised with scripted HTTP responses and real isolated executions: a failed implementation, a repair, analysis, an evidence-linked follow-up, and budget stopping. **That is software verification, not an autonomous language-model research demonstration.** Explicit Codex-account, Spark-cluster, and OpenAI-compatible providers are implemented. Spark discovery and a small real generation have passed. Codex's authentication lifecycle, protected storage, and streaming protocol have been exercised; browser sign-in and authenticated model discovery now work. Live Codex inference, live autonomous research, and matched-policy comparisons remain unverified.
+
+## Selected research study
+
+The [Qwen3.8-27B NVFP4 comparison brief](research/qwen38-nvfp4/brief.md) defines a controlled comparison of four published NVFP4 builds against the original BF16 model: coding correctness, instruction following, completion failures, paired uncertainty estimates, and an evidence-selected follow-up. Its [input inventory](research/qwen38-nvfp4/inputs.lock.json) pins the checkpoint, dataset, and scorer revisions.
+
+Model storage is prepared at `D:\models\huggingface` (`/mnt/d/models/huggingface` in NVIDIA-Workbench WSL), without reformatting the existing HDD. The brief records verified storage access and the remaining inference-runtime, read-only model-mount, and grading requirements. This is a completed design/storage milestone, not a completed benchmark or a runnable program submission; no weights have been downloaded for this study.
 
 ## Record-store commands
 
