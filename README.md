@@ -129,7 +129,9 @@ The [study protocol](research/qwen38-nvfp4/brief.md) pins the five checkpoints, 
 .venv-linux/bin/python research/qwen38-nvfp4/study.py run-all --series comparison
 ```
 
-`run-all` completes and grades the reserved compatibility items for every checkpoint before allowing primary generation. It then executes the full fifteen checkpoint/seed blocks in the prescribed rotated order and produces `analysis.json` and `report.md` under `.arl/studies/qwen38-nvfp4/primary/<series>`. The primary time reservation is derived from measured compatibility throughput and saved in `cohort.json`; memory and generation settings remain common across checkpoints.
+`run-all` completes and grades every checkpoint's reserved compatibility items before allowing primary generation. It saves the fifteen checkpoint/seed blocks and measured time reservation in `cohort.json`. A separate, immutable `execution-amendment.json` preserves already-submitted work and groups each checkpoint's remaining seeds into one resident-engine attempt. One CPU grader works alongside subsequent GPU generation. Final `analysis.json` and `report.md` are produced under `.arl/studies/qwen38-nvfp4/primary/<series>` only after the complete cohort has scoring evidence.
+
+Generation stages one checkpoint at a time in `~/Projects/autonomous-research-lab/model-cache`; `--cache-root /native/ssd/path` selects another location. Its parent must exist on the native Linux SSD; do not precreate the cache directory. The controller checks filesystem type and capacity, keeps 8 GiB free, and verifies copied weights against the approved HDD hashes. HDD originals remain unchanged. Only owned cached files are released after their inference attempt ends; historical cache registrations are not reusable after eviction.
 
 Provisioning downloads public pinned scorer code, hash-locked dependencies, and sentence-tokenizer assets into a dedicated build context. Experiment containers remain offline. Dataset selection streams the raw files and retains only the ranked selection, separating public prompts from private grading data. `freeze` checks tokenizer identity and renders both splits before inference.
 

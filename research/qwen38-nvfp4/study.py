@@ -1,6 +1,7 @@
 """Execute complete frozen study blocks with explicit series, split, and seed."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import argparse
 import fcntl
 import json
@@ -10,16 +11,18 @@ import re
 import shutil
 
 from autonomous_research_lab.execution import atomic_json, configuration, configure, run, wait_for_attempt
-from autonomous_research_lab.models import ExperimentSpec, LabError, Limits, read_json
+from autonomous_research_lab.models import ExperimentSpec, LabError, Limits, TERMINAL_STATES, read_json
 from autonomous_research_lab.store import Store
 from analysis import SEEDS, analyze, render_report
 from stage_tasks import DATA, file_hash, task_filename
 from worker.grade import lcb_test_count, lcb_wall_seconds
 from worker.serving import ENGINE_OPTIONS
+from model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]
 STATE = "studies/qwen38-nvfp4"
+CACHE_ROOT = Path.home() / "Projects" / PROJECT.name / "model-cache"
 
 
 def execute_once(store, record_path, spec):
@@ -33,14 +36,23 @@ def execute_once(store, record_path, spec):
         experiment = store.submit(spec)
         record = {"experiment_id": experiment["id"], "bundle_hash": experiment["bundle_hash"]}
         atomic_json(record_path, record)
+    return resume_attempt(store, record_path)
+
+
+def resume_attempt(store, record_path):
+    """Adopt the original immutable bundle, including a detached live worker."""
+    record = read_json(record_path)
+    experiment = store.get_experiment(record["experiment_id"])
     attempts = store.list_attempts(experiment["id"])
     if len(attempts) > 1:
         raise LabError("Multiple attempts exist for this study job; an explicit reconciliation is required")
     attempt = attempts[0] if attempts else run(store, experiment["id"])
+    if record.get("attempt_id") not in (None, attempt["id"]):
+        raise LabError("Recorded attempt identity changed")
     record["attempt_id"] = attempt["id"]
     atomic_json(record_path, record)
     print(json.dumps({"record": str(record_path), "attempt_id": attempt["id"], "state": attempt["state"]}), flush=True)
-    attempt = wait_for_attempt(store, attempt["id"], timeout=spec.limits.wall_seconds + 7200)
+    attempt = wait_for_attempt(store, attempt["id"], timeout=experiment["manifest"]["limits"]["wall_seconds"] + 7200)
     record.update(state=attempt["state"], error=attempt["error"], exit_code=attempt["exit_code"])
     atomic_json(record_path, record)
     return attempt
@@ -120,8 +132,9 @@ def freeze(store, inventory):
 
 
 def artifact_file(store, attempt, name):
-    """Consume only the bytes retained by the completed attempt's inventory."""
-    require_completed(attempt)
+    """Consume only hashed artifacts retained after the worker has terminated."""
+    if attempt["state"] not in TERMINAL_STATES or not attempt["result"]:
+        raise LabError("A live worker's mutable output is not a retained artifact")
     entry = next((item for item in attempt["result"]["artifacts"] if item["path"] == name), None)
     path = store.attempt_dir(attempt["id"]) / "output" / name
     if entry is None or path.is_symlink() or not path.is_file() or file_hash(path) != entry["sha256"]:
@@ -129,35 +142,84 @@ def artifact_file(store, attempt, name):
     return path
 
 
-def generate(store, inventory, label, *, split="compatibility", seed=17, series="baseline", wall_seconds=21600):
+def generation_identity(store, record_path, label, split, seed, series):
+    record = read_json(record_path)
+    experiment = store.get_experiment(record["experiment_id"])
+    settings = experiment["manifest"]["settings"]
+    seeds = settings["seeds"] if "seeds" in settings else [settings["seed"]]
+    if (settings["checkpoint"], settings["split"], settings["series"]) != (label, split, series) or seed not in seeds:
+        raise LabError("Generation block identity differs from the recorded experiment")
+    if settings["engine_options"] != ENGINE_OPTIONS:
+        raise LabError("Generation serving conditions differ from the common configuration")
+    return record, experiment
+
+
+def generation_block(store, record_path, label, split, seed, series):
+    """Read a completed seed, including historical single-seed attempt artifacts."""
+    record, experiment = generation_identity(store, record_path, label, split, seed, series)
+    attempt = store.get_attempt(record["attempt_id"])
+    if attempt["experiment_id"] != experiment["id"]:
+        raise LabError("Generation record refers to a different experiment")
+    settings = experiment["manifest"]["settings"]
+    if "seeds" in settings:
+        outcome = read_json(artifact_file(store, attempt, f"seed-{seed}/results.json"))
+        if outcome.get("status") != "completed":
+            raise LabError("The requested seed block did not complete; it was not retried")
+        details = outcome["details"]
+        if (details["checkpoint"], details["split"], details["seed"]) != (label, split, seed):
+            raise LabError("Retained seed receipt identity differs")
+        generations = f"seed-{seed}/generations.jsonl"
+    else:
+        outcome = require_completed(attempt)
+        generations = "generations.jsonl"
+    count = 16 if split == "compatibility" else 256
+    metrics = outcome["metrics"]
+    if metrics["requested"] != count or metrics["recorded"] != count or metrics["generation_errors"]:
+        raise LabError("The complete frozen seed block is not available")
+    return attempt, outcome, artifact_file(store, attempt, generations)
+
+
+def generation_spec(store, inventory, label, seeds, split, series, wall_seconds, model_input_id):
     state = store.root / STATE
-    frozen = read_json(state / "frozen.json")
-    staged = read_json(state / "staged.json")
-    if split == "primary":
-        plan = primary_plan(store, inventory, series)
-        if wall_seconds != plan["wall_seconds"]:
-            raise LabError("Primary generation must use the common measured reservation from its cohort plan")
     checkpoint = next(item for item in inventory["checkpoints"] if item["label"] == label)
-    if label not in staged or (staged[label]["repo_id"], staged[label]["revision"]) != (checkpoint["repo_id"], checkpoint["revision"]):
-        raise LabError(f"Pinned {label} checkpoint is not staged and verified")
-    approved = store.get_input(staged[label]["input_id"])
+    approved = store.get_input(model_input_id)
     if approved["sha256"] != checkpoint["staged_input"]["inventory_sha256"]:
         raise LabError("Approved checkpoint inventory differs from the pinned release")
+    frozen = read_json(state / "frozen.json")
     if store.get_input(frozen["inputs"][split]["id"])["sha256"] != inventory["task_inventory"][split]["approved_inventory_sha256"]:
         raise LabError("Approved prompts differ from the frozen study inventory")
     tokenizers = read_json(state / "tokenizers.json")
-    spec = ExperimentSpec(name=f"qwen38-{split}-{series}-{label}-seed-{seed}", source=HERE / "worker", entrypoint="generate.py",
-                         question="How does this pinned checkpoint perform on the frozen tasks under the common inference conditions?",
-                         procedure="One complete frozen split and shared seed; preserve every requested response and never retry invisibly.",
-                         settings={"checkpoint": label, "repo_id": checkpoint["repo_id"], "revision": checkpoint["revision"],
-                                   "split": split, "seed": seed, "series": series, "engine_options": ENGINE_OPTIONS},
-                         gpu=True, inputs={"model": staged[label]["input_id"], "tokenizer": tokenizers["bf16"]["input_id"],
-                                           "prompts": frozen["inputs"][split]["id"]},
-                         outputs=("results.json", "generations.jsonl", "runtime.json", "warmup.json"),
-                         limits=Limits(wall_seconds=wall_seconds, memory_bytes=26 * 1024**3, output_bytes=8 * 1024**3,
-                                       log_bytes=32 * 1024**2, pids=512))
-    attempt = execute_once(store, state / split / series / f"seed-{seed}" / label / "generation.json", spec)
-    require_completed(attempt)
+    outputs = ["results.json", "runtime.json", "warmup.json"]
+    for seed in seeds:
+        outputs.extend((f"seed-{seed}/results.json", f"seed-{seed}/generations.jsonl"))
+    return ExperimentSpec(
+        name=f"qwen38-{split}-{series}-{label}-seeds-{'-'.join(map(str, seeds))}",
+        source=HERE / "worker", entrypoint="generate.py",
+        question="How does this pinned checkpoint perform on the frozen tasks under the common inference conditions?",
+        procedure="Keep one checkpoint resident across complete frozen seed blocks; preserve every response without hidden retries.",
+        settings={"checkpoint": label, "repo_id": checkpoint["repo_id"], "revision": checkpoint["revision"],
+                  "split": split, "seeds": list(seeds), "series": series, "engine_options": ENGINE_OPTIONS},
+        gpu=True, inputs={"model": model_input_id, "tokenizer": tokenizers["bf16"]["input_id"],
+                          "prompts": frozen["inputs"][split]["id"]}, outputs=tuple(outputs),
+        limits=Limits(wall_seconds=wall_seconds * len(seeds), memory_bytes=26 * 1024**3,
+                      output_bytes=8 * 1024**3, log_bytes=32 * 1024**2, pids=512))
+
+
+def generate(store, inventory, label, *, split="compatibility", seed=17, series="baseline", wall_seconds=21600, cache_root=CACHE_ROOT):
+    record_path = store.root / STATE / split / series / f"seed-{seed}" / label / "generation.json"
+    if record_path.exists():
+        generation_identity(store, record_path, label, split, seed, series)
+        attempt = resume_attempt(store, record_path)
+    else:
+        if split == "primary" and wall_seconds != primary_plan(store, inventory, series)["wall_seconds"]:
+            raise LabError("Primary generation must use the common measured reservation")
+        staged = read_json(store.root / STATE / "staged.json")
+        checkpoint = next(item for item in inventory["checkpoints"] if item["label"] == label)
+        cached = cache_checkpoint(store, checkpoint, staged[label]["input_id"], cache_root)
+        spec = generation_spec(store, inventory, label, [seed], split, series, wall_seconds, cached["id"])
+        attempt = execute_once(store, record_path, spec)
+        release_finished_cache(store, cached["id"], cache_root)
+    generation_block(store, record_path, label, split, seed, series)
     return {"checkpoint": label, "attempt_id": attempt["id"], "state": attempt["state"]}
 
 
@@ -195,13 +257,11 @@ def grade(store, label, *, split="compatibility", seed=17, series="baseline"):
     if configuration(grader)["image"] != frozen["grading_image_id"]:
         raise LabError("Grading image differs from the frozen protocol")
     block = state / split / series / f"seed-{seed}" / label
-    record = read_json(block / "generation.json")
-    attempt = store.get_attempt(record["attempt_id"])
-    require_completed(attempt)
+    attempt, _, generation_file = generation_block(store, block / "generation.json", label, split, seed, series)
     public = read_json(store.input_source(frozen["inputs"][split]["id"]) / "tasks.json", max_bytes=64 * 1024**2)
     expected = {row["id"]: row for row in public["tasks"]}
     generations = {}
-    with artifact_file(store, attempt, "generations.jsonl").open(encoding="utf-8") as source:
+    with generation_file.open(encoding="utf-8") as source:
         for line in source:
             row = json.loads(line)
             if row["id"] not in expected or row["id"] in generations:
@@ -252,8 +312,9 @@ def primary_plan(store, inventory, series):
         summary = read_json(block / "summary.json")
         if (summary["checkpoint"], summary["split"], summary["seed"], summary["series"]) != (label, "compatibility", 17, series):
             raise LabError("Compatibility summary identity changed")
-        attempt = store.get_attempt(summary["generation_attempt"])
-        observed = require_completed(attempt)
+        attempt, observed, _ = generation_block(store, block / "generation.json", label, "compatibility", 17, series)
+        if summary["generation_attempt"] != attempt["id"]:
+            raise LabError("Compatibility summary refers to a different generation")
         if observed["metrics"]["requested"] != 16 or observed["metrics"]["recorded"] != 16 or observed["metrics"]["generation_errors"]:
             raise LabError(f"{label} did not execute all sixteen compatibility requests without an engine error")
         rows = summary["results"]
@@ -320,8 +381,9 @@ def analyze_cohort(store, inventory, series):
         summary = read_json(folder / "summary.json", max_bytes=8 * 1024**2)
         if (summary["checkpoint"], summary["seed"], summary["split"], summary["series"]) != (block["checkpoint"], block["seed"], "primary", series):
             raise LabError("Primary block identity differs")
-        attempt = store.get_attempt(summary["generation_attempt"])
-        artifact_file(store, attempt, "generations.jsonl")
+        attempt, observed, _ = generation_block(store, folder / "generation.json", block["checkpoint"], "primary", block["seed"], series)
+        if summary["generation_attempt"] != attempt["id"]:
+            raise LabError("Primary summary refers to a different generation")
         artifact_file(store, attempt, "runtime.json")
         for row in summary["results"]:
             scored = grader.get_attempt(row["attempt_id"])
@@ -331,8 +393,9 @@ def analyze_cohort(store, inventory, series):
         rows.extend(summary["results"])
         experiment = store.get_experiment(attempt["experiment_id"])
         provenance.append({"checkpoint": block["checkpoint"], "seed": block["seed"], "attempt_id": attempt["id"],
-                           "bundle_hash": experiment["bundle_hash"], "wall_seconds": attempt["result"]["wall_seconds"],
-                           "generation_metrics": attempt["result"]["observations"]["metrics"],
+                           "bundle_hash": experiment["bundle_hash"], "attempt_wall_seconds": attempt["result"]["wall_seconds"],
+                           "attempt_seeds": experiment["manifest"]["settings"].get("seeds", [block["seed"]]),
+                           "generation_metrics": observed["metrics"],
                            "artifacts": attempt["result"]["artifacts"]})
     labels = [item["label"] for item in inventory["checkpoints"]]
     result = analyze(rows, expected_ids, labels)
@@ -340,6 +403,9 @@ def analyze_cohort(store, inventory, series):
                             "analysis_code_sha256": file_hash(HERE / "analysis.py"), "frozen_inputs": frozen["inputs"],
                             "runs": provenance, "checkpoints": inventory["checkpoints"],
                             "inference_runtime": inventory["inference_runtime"], "grading_runtime": inventory["grading_runtime"]}
+    amendment_path = state / "primary" / series / "execution-amendment.json"
+    if amendment_path.exists():
+        result["provenance"]["execution_amendment"] = read_json(amendment_path)
     destination = state / "primary" / series
     atomic_json(destination / "analysis.json", result)
     (destination / "report.md").write_text(render_report(result), encoding="utf-8")
@@ -347,16 +413,132 @@ def analyze_cohort(store, inventory, series):
             "requested_responses": result["requested_responses"]}
 
 
-def run_cohort(store, inventory, series):
+def execution_amendment(store, inventory, series, plan, cache_root):
+    """Freeze the approved handoff without rewriting the original cohort."""
+    folder = store.root / STATE / "primary" / series
+    destination = folder / "execution-amendment.json"
+    cohort_hash = file_hash(folder / "cohort.json")
+    if destination.exists():
+        amendment = read_json(destination)
+        if (amendment["cohort_sha256"], amendment["cache_root"]) != (cohort_hash, str(cache_root)):
+            raise LabError("The execution amendment differs; it was not replaced")
+    else:
+        retained = []
+        for block in plan["blocks"]:
+            record_path = folder / f"seed-{block['seed']}" / block["checkpoint"] / "generation.json"
+            if record_path.exists():
+                record = read_json(record_path)
+                retained.append({**block, "experiment_id": record["experiment_id"],
+                                 "attempt_id": record.get("attempt_id")})
+        retained_keys = {(block["checkpoint"], block["seed"]) for block in retained}
+        groups = []
+        for checkpoint in inventory["checkpoints"]:
+            seeds = [seed for seed in SEEDS if (checkpoint["label"], seed) not in retained_keys]
+            if seeds:
+                groups.append({"checkpoint": checkpoint["label"], "seeds": seeds})
+        amendment = {
+            "schema_version": 1, "series": series, "cohort_sha256": cohort_hash,
+            "authorization": "User approved resident remaining seeds, verified native SSD caching, and overlapping CPU grading.",
+            "retained_blocks": retained, "remaining_groups": groups, "cache_root": str(cache_root),
+            "grading_workers": 1, "per_seed_wall_seconds": plan["wall_seconds"],
+            "engine_seed_policy": "Initialize once with the first requested seed; set each request's sampling seed to its block seed.",
+            "unchanged": "Checkpoint bytes, prompts, tasks, sampling, context, KV precision, generation limits, and scoring.",
+        }
+        atomic_json(destination, amendment)
+    expected = {(block["checkpoint"], block["seed"]) for block in plan["blocks"]}
+    scheduled = [(block["checkpoint"], block["seed"]) for block in amendment["retained_blocks"]]
+    scheduled.extend((group["checkpoint"], seed) for group in amendment["remaining_groups"] for seed in group["seeds"])
+    if len(scheduled) != len(expected) or set(scheduled) != expected:
+        raise LabError("The execution amendment duplicates or omits frozen seed blocks")
+    if amendment["grading_workers"] != 1 or amendment["per_seed_wall_seconds"] != plan["wall_seconds"]:
+        raise LabError("The execution amendment changes resource reservations")
+    return amendment
+
+
+def release_finished_cache(store, input_id, cache_root):
+    if cached_input_id(cache_root) != input_id:
+        return
+    for active in store.list_attempts(active_only=True):
+        bindings = store.get_experiment(active["experiment_id"])["manifest"]["inputs"]
+        if input_id in bindings.values():
+            raise LabError("The checkpoint cache is still in use; it was not released")
+    release_checkpoint_cache(store, input_id, cache_root)
+
+
+def generate_resident_group(store, inventory, group, series, wall_seconds, cache_root):
+    label, seeds = group["checkpoint"], group["seeds"]
+    folder = store.root / STATE / "primary" / series
+    record_path = folder / "resident" / label / "generation.json"
+    if record_path.exists():
+        record = read_json(record_path)
+        model_input_id = store.get_experiment(record["experiment_id"])["manifest"]["inputs"]["model"]
+    else:
+        checkpoint = next(item for item in inventory["checkpoints"] if item["label"] == label)
+        staged = read_json(store.root / STATE / "staged.json")
+        cached = cache_checkpoint(store, checkpoint, staged[label]["input_id"], cache_root)
+        model_input_id = cached["id"]
+    spec = generation_spec(store, inventory, label, seeds, "primary", series, wall_seconds, model_input_id)
+    attempt = execute_once(store, record_path, spec)
+    record = read_json(record_path)
+    retained = {item["path"] for item in (attempt["result"] or {}).get("artifacts", [])}
+    for seed in seeds:
+        receipt_path = f"seed-{seed}/results.json"
+        if receipt_path not in retained:
+            continue
+        receipt = read_json(artifact_file(store, attempt, receipt_path))
+        if receipt.get("status") != "completed":
+            continue
+        destination = folder / f"seed-{seed}" / label / "generation.json"
+        reference = {key: record[key] for key in ("experiment_id", "bundle_hash", "attempt_id")}
+        if destination.exists():
+            previous = read_json(destination)
+            if any(previous[key] != value for key, value in reference.items()):
+                raise LabError("A seed already refers to a different attempt; it was not overwritten")
+        else:
+            atomic_json(destination, reference)
+        generation_block(store, destination, label, "primary", seed, series)
+    # A later seed may fail; earlier complete seed artifacts remain indexed.
+    release_finished_cache(store, model_input_id, cache_root)
+    require_completed(attempt)
+    for seed in seeds:
+        generation_block(store, folder / f"seed-{seed}" / label / "generation.json", label, "primary", seed, series)
+
+
+def run_cohort(store, inventory, series, cache_root=CACHE_ROOT):
     for checkpoint in inventory["checkpoints"]:
         label = checkpoint["label"]
-        generate(store, inventory, label, series=series)
-        grade(store, label, series=series)
+        summary = store.root / STATE / "compatibility" / series / "seed-17" / label / "summary.json"
+        if not summary.exists():
+            generate(store, inventory, label, series=series, cache_root=cache_root)
+            grade(store, label, series=series)
     plan = primary_plan(store, inventory, series)
-    for block in plan["blocks"]:
-        options = {"split": "primary", "seed": block["seed"], "series": series}
-        generate(store, inventory, block["checkpoint"], wall_seconds=plan["wall_seconds"], **options)
-        grade(store, block["checkpoint"], **options)
+    amendment = execution_amendment(store, inventory, series, plan, cache_root)
+    futures = []
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwen38-grading") as graders:
+        def queue_grade(label, seed):
+            summary = store.root / STATE / "primary" / series / f"seed-{seed}" / label / "summary.json"
+            if not summary.exists():
+                futures.append(graders.submit(grade, store, label, split="primary", seed=seed, series=series))
+
+        for block in amendment["retained_blocks"]:
+            label, seed = block["checkpoint"], block["seed"]
+            record_path = store.root / STATE / "primary" / series / f"seed-{seed}" / label / "generation.json"
+            record = read_json(record_path)
+            if record["experiment_id"] != block["experiment_id"] or (
+                block["attempt_id"] is not None and record.get("attempt_id") != block["attempt_id"]
+            ):
+                raise LabError("A retained generation identity changed during handoff")
+            generate(store, inventory, label, split="primary", seed=seed, series=series, wall_seconds=plan["wall_seconds"])
+            queue_grade(label, seed)
+        for group in amendment["remaining_groups"]:
+            for future in futures:
+                if future.done():
+                    future.result()
+            generate_resident_group(store, inventory, group, series, plan["wall_seconds"], cache_root)
+            for seed in group["seeds"]:
+                queue_grade(group["checkpoint"], seed)
+        for future in futures:
+            future.result()
     return analyze_cohort(store, inventory, series)
 
 
@@ -369,6 +551,7 @@ def main():
     parser.add_argument("--seed", type=int, choices=(17, 29, 43), default=17)
     parser.add_argument("--series", default="baseline")
     parser.add_argument("--wall-seconds", type=int, default=21600)
+    parser.add_argument("--cache-root", type=Path, default=CACHE_ROOT)
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", args.series):
         parser.error("series must be a short lowercase identifier")
@@ -386,14 +569,15 @@ def main():
             except BlockingIOError as exc:
                 raise LabError("Another controller owns this study series; it was not duplicated") from exc
             if args.action == "run-all":
-                result = run_cohort(store, inventory, args.series)
+                result = run_cohort(store, inventory, args.series, args.cache_root.expanduser().absolute())
             elif args.action == "analyze":
                 result = analyze_cohort(store, inventory, args.series)
             else:
                 if args.checkpoint is None:
                     parser.error("generate and grade require a checkpoint label")
                 options = {"split": args.split, "seed": args.seed, "series": args.series}
-                result = generate(store, inventory, args.checkpoint, wall_seconds=args.wall_seconds, **options) if args.action == "generate" else grade(store, args.checkpoint, **options)
+                result = generate(store, inventory, args.checkpoint, wall_seconds=args.wall_seconds,
+                                  cache_root=args.cache_root.expanduser().absolute(), **options) if args.action == "generate" else grade(store, args.checkpoint, **options)
     print(json.dumps(result, indent=2))
 
 
