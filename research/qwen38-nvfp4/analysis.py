@@ -185,7 +185,7 @@ def analyze(rows, expected_ids, checkpoints, *, resamples=RESAMPLES):
             model = {"requested": len(flat), "counts": counts, "observed_pass_rate": counts["correct"] / len(flat),
                      "normal_completion_rate": counts["normal_completion"] / len(flat),
                      "unavailable_scorer_responses": sum(unavailable(row) for row in flat), "item_level_events": events,
-                     "generation_seconds": math.fsum(row["generation_seconds"] for row in flat),
+                     "summed_request_latency_seconds": math.fsum(row["generation_seconds"] for row in flat),
                      "generated_tokens": sum(row["generated_tokens"] for row in flat)}
             if family == "ifeval":
                 instructions = sum(row["instruction_count"] for row in flat)

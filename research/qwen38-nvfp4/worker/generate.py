@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 import time
-import traceback
+from contextlib import suppress
 
 
 def repeated_block(tokens):
@@ -56,9 +56,44 @@ class WorkerMetadata:
     def arl_implementation_paths(self):
         return model_paths(self.get_model())
 
+    def arl_execution_state(self):
+        config = self.vllm_config
+        runner = self.model_runner
+        entries = getattr(runner.model, "concrete_cudagraph_entries", {})
+        return {
+            "compilation_mode": str(config.compilation_config.mode),
+            "cudagraph_mode": config.compilation_config.cudagraph_mode.name,
+            "capture_sizes": config.compilation_config.cudagraph_capture_sizes,
+            "captured_full_graphs": sum(entry.cudagraph is not None for entry in entries.values()),
+            "dispatcher_mode": runner.cudagraph_dispatcher.cudagraph_mode.name,
+            "async_scheduling": config.scheduler_config.async_scheduling,
+            "max_num_seqs": config.scheduler_config.max_num_seqs,
+            "compute_dtype": str(config.model_config.dtype),
+            "kv_cache_dtype": config.cache_config.cache_dtype,
+            "num_gpu_blocks": config.cache_config.num_gpu_blocks,
+            "available_kv_cache_memory_bytes": getattr(self, "available_kv_cache_memory_bytes", None),
+        }
+
 
 def save(name, value):
     Path("/workspace", name).write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+
+
+def engine_arguments(settings):
+    options = settings["engine_options"]
+    return {"model": "/inputs/model", "tokenizer": "/inputs/tokenizer", "trust_remote_code": False,
+            "dtype": "bfloat16", "kv_cache_dtype": "bfloat16", "max_model_len": 32768,
+            "tensor_parallel_size": 1, "max_num_seqs": options["max_num_seqs"],
+            "max_num_batched_tokens": options["max_num_batched_tokens"],
+            "enable_chunked_prefill": options["enable_chunked_prefill"],
+            "enable_prefix_caching": options["enable_prefix_caching"],
+            "speculative_config": options["speculative_config"],
+            "enforce_eager": options["enforce_eager"], "cpu_offload_gb": 0, "offload_group_size": 0,
+            "gpu_memory_utilization": 0.90, "seed": settings["seed"], "generation_config": "vllm",
+            "load_format": "safetensors", "safetensors_load_strategy": "lazy",
+            "limit_mm_per_prompt": {"image": 0, "video": 0}, "hf_token": False,
+            "cudagraph_metrics": True, "disable_log_stats": False,
+            "worker_extension_cls": "generate.WorkerMetadata"}
 
 
 def main():
@@ -88,15 +123,7 @@ def main():
             raise ValueError("Tokenizer changed after prompt freezing")
         if len(task["prompt_token_ids"]) + 16384 > 32768:
             raise ValueError("A frozen prompt exceeds the common context")
-    engine_args = {"model": "/inputs/model", "tokenizer": "/inputs/tokenizer", "trust_remote_code": False,
-                   "dtype": "bfloat16", "kv_cache_dtype": "bfloat16", "max_model_len": 32768,
-                   "tensor_parallel_size": 1, "max_num_seqs": 1, "max_num_batched_tokens": 4096,
-                   "enable_chunked_prefill": True, "enable_prefix_caching": False, "speculative_config": None,
-                   "enforce_eager": True, "cpu_offload_gb": 0, "offload_group_size": 0,
-                   "gpu_memory_utilization": 0.90, "seed": seed, "generation_config": "vllm",
-                   "load_format": "safetensors", "safetensors_load_strategy": "lazy",
-                   "limit_mm_per_prompt": {"image": 0, "video": 0}, "hf_token": False,
-                   "worker_extension_cls": "generate.WorkerMetadata"}
+    engine_args = engine_arguments(settings)
     started = time.monotonic()
     llm = LLM(**engine_args)
     load_seconds = time.monotonic() - started
@@ -106,18 +133,33 @@ def main():
         llm.llm_engine.engine_core.shutdown(timeout=30)
 
 
+def consume_completed(engine, pending, persist):
+    """Persist each finished external request ID before releasing its pending entry."""
+    while engine.has_unfinished_requests():
+        for result in engine.step():
+            if not result.finished or result.request_id not in pending:
+                raise RuntimeError("Unexpected or duplicate completion from the engine")
+            persist(pending[result.request_id], result)
+            del pending[result.request_id]
+    if pending:
+        raise RuntimeError(f"Engine finished without completing {len(pending)} requested responses")
+
+
 def run_requests(llm, tokenizer, frozen, settings, engine_args, load_seconds):
     from vllm import SamplingParams
+    from vllm.sampling_params import RequestOutputKind
+    from vllm.renderers.inputs.preprocess import parse_model_prompt
     import torch
 
     tasks, seed = frozen["tasks"], settings["seed"]
     config = llm.llm_engine.vllm_config
     if config.cache_config.cache_dtype != "bfloat16" or config.cache_config.enable_prefix_caching or config.speculative_config is not None:
         raise ValueError("Actual cache or speculative decoding conditions differ from the protocol")
-    if config.model_config.max_model_len != 32768 or config.scheduler_config.max_num_seqs != 1:
-        raise ValueError("Actual context or concurrency differs from the protocol")
+    if config.model_config.max_model_len != 32768 or config.scheduler_config.max_num_seqs != engine_args["max_num_seqs"]:
+        raise ValueError("Actual context or concurrency differs from the recorded conditions")
     runtime = {"engine_arguments": engine_args, "engine_config": str(config), "load_seconds": load_seconds,
                "model_implementation_paths": llm.collective_rpc("arl_implementation_paths", timeout=60),
+               "worker_execution_state": llm.collective_rpc("arl_execution_state", timeout=60),
                "visible_gpu_uuid": os.environ.get("CUDA_VISIBLE_DEVICES"), "cuda_device_count": torch.cuda.device_count(),
                "gpu_name": torch.cuda.get_device_name(0), "gpu_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
                "kv_cache_dtype": config.cache_config.cache_dtype, "attention_config": str(config.attention_config),
@@ -136,32 +178,65 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, load_seconds):
     sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
                 "presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0,
                 "max_tokens": 16384, "seed": seed, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
-    errors = 0
+    errors = recorded = generated_tokens = 0
+    engine = llm.llm_engine
+    pending, submitted = {}, {}
+    tok_params = llm.renderer.default_cmpl_tok_params.with_kwargs()
+    params = SamplingParams(**sampling, output_kind=RequestOutputKind.FINAL_ONLY)
     with Path("/workspace/generations.jsonl").open("x", encoding="utf-8") as destination:
-        for task in tasks:
+        def persist(task, result):
+            nonlocal errors, recorded, generated_tokens
+            if result.prompt_token_ids != task["prompt_token_ids"] or len(result.outputs) != 1:
+                raise RuntimeError("Completed response differs from its frozen request")
+            output = result.outputs[0]
+            tokens = list(output.token_ids)
+            error = None
+            if output.finish_reason not in {"stop", "length", "repetition"}:
+                error = f"Engine terminated the request with {output.finish_reason!r}"
+                errors += 1
             row = {key: task[key] for key in ("id", "family", "dataset_id", "prompt_sha256", "rendered_prompt_sha256", "prompt_tokens_sha256")}
             row.update(checkpoint=settings["checkpoint"], repo_id=settings["repo_id"], revision=settings["revision"],
-                       seed=seed, thinking_enabled=True, prompt_tokens=len(task["prompt_token_ids"]))
-            started = time.monotonic()
-            try:
-                output = llm.generate([{"prompt_token_ids": task["prompt_token_ids"]}], SamplingParams(**sampling), use_tqdm=False)[0].outputs[0]
-                tokens = list(output.token_ids)
-                row.update(text=output.text, raw_decoded_text=tokenizer.decode(tokens, skip_special_tokens=False),
-                           token_ids=tokens, finish_reason=output.finish_reason, stop_reason=output.stop_reason,
-                           error=None, repeated_128_token_block=repeated_block(tokens))
-            except Exception as exc:
-                errors += 1
-                row.update(text="", raw_decoded_text="", token_ids=[], finish_reason=None, stop_reason=None,
-                           error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc(), repeated_128_token_block=False)
-            row["generation_seconds"] = time.monotonic() - started
+                       seed=seed, thinking_enabled=True, prompt_tokens=len(task["prompt_token_ids"]),
+                       text=output.text, raw_decoded_text=tokenizer.decode(tokens, skip_special_tokens=False),
+                       token_ids=tokens, finish_reason=output.finish_reason, stop_reason=output.stop_reason,
+                       error=error, repeated_128_token_block=repeated_block(tokens),
+                       generation_seconds=time.monotonic() - submitted[task["id"]])
             destination.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
             destination.flush()
             os.fsync(destination.fileno())
-            print(json.dumps({"id": row["id"], "tokens": len(row["token_ids"]), "finish_reason": row["finish_reason"], "error": row["error"]}), flush=True)
-    save("results.json", {"metrics": {"requested": len(tasks), "recorded": len(tasks), "generation_errors": errors,
+            recorded += 1
+            generated_tokens += len(tokens)
+            print(json.dumps({"id": row["id"], "tokens": len(tokens), "finish_reason": row["finish_reason"], "error": error}), flush=True)
+
+        # The core starts work during submission, so timing must start before enqueue.
+        batch_started = time.monotonic()
+        try:
+            for task in tasks:
+                identity = task["id"]
+                if identity in pending:
+                    raise ValueError("Duplicate frozen request identity")
+                pending[identity] = task
+                submitted[identity] = time.monotonic()
+                prompt = {"prompt_token_ids": task["prompt_token_ids"]}
+                parsed = parse_model_prompt(llm.model_config, prompt)
+                (engine_input,) = llm.renderer.render_cmpl([parsed], tok_params)
+                # add_request returns an internal randomized ID; outputs use this external ID.
+                engine.add_request(identity, engine_input, params)
+            consume_completed(engine, pending, persist)
+        except BaseException:
+            with suppress(Exception):
+                engine.abort_request(list(pending))
+            raise
+        generation_wall_seconds = time.monotonic() - batch_started
+    save("results.json", {"metrics": {"requested": len(tasks), "recorded": recorded, "generation_errors": errors,
+                                       "generated_tokens": generated_tokens, "generation_wall_seconds": generation_wall_seconds,
                                        "load_seconds": load_seconds},
                           "details": {"checkpoint": settings["checkpoint"], "split": frozen["split"], "seed": seed,
-                                      "sampling": sampling}})
+                                      "sampling": sampling, "request_latency_includes_queue": True,
+                                      "throughput_interval": "first submission through last durable completion"}})
+    engine.do_log_stats()
+    if errors:
+        raise RuntimeError("The engine reported failed requests; the block was retained, not silently retried")
 
 
 if __name__ == "__main__":

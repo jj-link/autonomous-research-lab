@@ -15,6 +15,7 @@ from autonomous_research_lab.store import Store
 from analysis import SEEDS, analyze, render_report
 from stage_tasks import DATA, file_hash, task_filename
 from worker.grade import lcb_test_count, lcb_wall_seconds
+from worker.serving import ENGINE_OPTIONS
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]
@@ -149,7 +150,7 @@ def generate(store, inventory, label, *, split="compatibility", seed=17, series=
                          question="How does this pinned checkpoint perform on the frozen tasks under the common inference conditions?",
                          procedure="One complete frozen split and shared seed; preserve every requested response and never retry invisibly.",
                          settings={"checkpoint": label, "repo_id": checkpoint["repo_id"], "revision": checkpoint["revision"],
-                                   "split": split, "seed": seed, "series": series},
+                                   "split": split, "seed": seed, "series": series, "engine_options": ENGINE_OPTIONS},
                          gpu=True, inputs={"model": staged[label]["input_id"], "tokenizer": tokenizers["bf16"]["input_id"],
                                            "prompts": frozen["inputs"][split]["id"]},
                          outputs=("results.json", "generations.jsonl", "runtime.json", "warmup.json"),
@@ -271,14 +272,19 @@ def primary_plan(store, inventory, series):
             raise LabError("Compatibility did not use the allocated GPU")
         if metadata["kv_cache_dtype"] != "bfloat16" or not metadata["model_implementation_paths"]:
             raise LabError("Compatibility runtime evidence is incomplete")
+        if any(key not in metadata["engine_arguments"] or metadata["engine_arguments"][key] != value
+               for key, value in ENGINE_OPTIONS.items()):
+            raise LabError("Compatibility serving conditions differ from the common optimized configuration")
         total_tokens = sum(row["generated_tokens"] for row in rows)
-        total_seconds = math.fsum(row["generation_seconds"] for row in rows)
+        total_seconds = observed["metrics"]["generation_wall_seconds"]
+        if total_tokens != observed["metrics"]["generated_tokens"]:
+            raise LabError("Compatibility token accounting differs from the retained generation result")
         if total_tokens <= 0 or not math.isfinite(total_seconds) or total_seconds <= 0:
             raise LabError("Compatibility supplies no usable throughput measurement")
         slowest_seconds_per_token = max(slowest_seconds_per_token, total_seconds / total_tokens)
         longest_load = max(longest_load, metadata["load_seconds"])
         compatibility[label] = {"attempt_id": attempt["id"], "generated_tokens": total_tokens,
-                                "generation_seconds": total_seconds, "load_seconds": metadata["load_seconds"]}
+                                "generation_wall_seconds": total_seconds, "load_seconds": metadata["load_seconds"]}
     # Cover every requested response at the full output allowance, with 50% headroom.
     # This is a common reservation, not a claim that all checkpoints take this long.
     seconds = 1.5 * (longest_load + 256 * 16384 * slowest_seconds_per_token)
@@ -286,8 +292,8 @@ def primary_plan(store, inventory, series):
     blocks = [{"checkpoint": label, "seed": seed} for offset, seed in enumerate(SEEDS)
               for label in labels[offset:] + labels[:offset]]
     plan = {"series": series, "split": "primary", "items": 256, "seeds": list(SEEDS),
-            "wall_seconds": wall_seconds, "compatibility": compatibility, "blocks": blocks,
-            "reservation_rule": "1.5 * (longest measured load + 256 * 16384 * slowest aggregate seconds per generated token), rounded up to an hour; at least six hours"}
+            "wall_seconds": wall_seconds, "engine_options": ENGINE_OPTIONS, "compatibility": compatibility, "blocks": blocks,
+            "reservation_rule": "1.5 * (longest measured load + 256 * 16384 * slowest aggregate generation wall-seconds per generated token), rounded up to an hour; at least six hours"}
     destination = state / "primary" / series / "cohort.json"
     if destination.exists():
         if read_json(destination) != plan:
@@ -326,6 +332,7 @@ def analyze_cohort(store, inventory, series):
         experiment = store.get_experiment(attempt["experiment_id"])
         provenance.append({"checkpoint": block["checkpoint"], "seed": block["seed"], "attempt_id": attempt["id"],
                            "bundle_hash": experiment["bundle_hash"], "wall_seconds": attempt["result"]["wall_seconds"],
+                           "generation_metrics": attempt["result"]["observations"]["metrics"],
                            "artifacts": attempt["result"]["artifacts"]})
     labels = [item["label"] for item in inventory["checkpoints"]]
     result = analyze(rows, expected_ids, labels)
