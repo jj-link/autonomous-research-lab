@@ -7,11 +7,13 @@ from pathlib import Path
 import shutil
 import signal
 import sqlite3
+import subprocess
 import time
 import unittest
 from unittest.mock import patch
 import uuid
 
+from autonomous_research_lab import execution
 from autonomous_research_lab.execution import (
     attempt_lock, configure, container_name, environment, inspect_owned,
     podman, recover, run, stop, supervise,
@@ -225,6 +227,75 @@ Path("/workspace/results.json").write_text(json.dumps({"metrics": {"input_read_o
         recovered = recover(self.store, wait=True)
         self.assertEqual(recovered[0]["id"], attempt["id"])
         self.assertEqual(recovered[0]["state"], "failed")
+
+    def test_inspection_timeout_preserves_already_finished_outcomes_without_reexecution(self):
+        cases = (
+            ("starting", 0, True, "inspect", "completed"),
+            ("running", 0, True, "inspect", "completed"),
+            ("running", 7, True, "inspect", "failed"),
+            ("running", 0, False, "inspect", "failed"),
+            ("running", 0, True, "unrelated", "failed"),
+        )
+        for phase, exit_code, writes_results, failure, expected in cases:
+            with self.subTest(phase=phase, exit_code=exit_code, writes_results=writes_results, failure=failure):
+                code = (
+                    "import json, time\nfrom pathlib import Path\n"
+                    "with Path('/workspace/executions').open('a') as stream: stream.write('once\\n')\n"
+                    "while not Path('/workspace/release').exists(): time.sleep(0.02)\n"
+                )
+                if writes_results:
+                    code += "Path('/workspace/results.json').write_text(json.dumps({'metrics': {'value': 7}}))\n"
+                code += f"raise SystemExit({exit_code})\n"
+                experiment = self.submit(code, wall_seconds=30)
+                attempt = self.store.create_attempt(experiment["id"])
+                process = execution._podman_process
+                injected = False
+
+                def observe(*args, **kwargs):
+                    nonlocal injected
+                    result = process(*args, **kwargs)
+                    if args == ("container", "inspect", container_name(attempt["id"])) and not result.returncode and not injected:
+                        container = json.loads(result.stdout)[0]
+                        if container["State"].get("Running") and self.store.get_attempt(attempt["id"])["state"] == phase:
+                            (self.store.attempt_dir(attempt["id"]) / "output/release").write_text("finish\n")
+                            podman("wait", container["Id"], timeout=15)
+                            injected = True
+                            if failure == "inspect":
+                                raise subprocess.TimeoutExpired(["podman", *args], 30)
+                            raise OSError("unrelated supervisor failure")
+                    return result
+
+                with patch.object(execution, "_podman_process", side_effect=observe):
+                    result = supervise(self.store, attempt["id"])
+                self.assertTrue(injected)
+                self.assertEqual(result["state"], expected, result)
+                self.assertEqual(result["exit_code"], exit_code)
+                self.assertEqual((self.store.attempt_dir(attempt["id"]) / "output/executions").read_text(), "once\n")
+                diagnostics = [event for event in self.store.events(attempt["id"]) if event["kind"] == "container_observation_timeout"]
+                self.assertEqual(bool(diagnostics), failure == "inspect")
+                if diagnostics:
+                    self.assertIn("TimeoutExpired", diagnostics[0]["details"]["error"])
+
+    def test_inspection_timeout_cannot_promote_work_terminated_during_cleanup(self):
+        experiment = self.submit("import time\ntime.sleep(60)\n", wall_seconds=30)
+        attempt = self.store.create_attempt(experiment["id"])
+        process = execution._podman_process
+        injected = False
+
+        def observe(*args, **kwargs):
+            nonlocal injected
+            if args == ("container", "inspect", container_name(attempt["id"])) and not injected:
+                if self.store.get_attempt(attempt["id"])["state"] == "running":
+                    injected = True
+                    raise subprocess.TimeoutExpired(["podman", *args], 30)
+            return process(*args, **kwargs)
+
+        with patch.object(execution, "_podman_process", side_effect=observe):
+            result = supervise(self.store, attempt["id"])
+        self.assertTrue(injected)
+        self.assertEqual(result["state"], "failed", result)
+        self.assertNotEqual(result["exit_code"], 0)
+        self.assertFalse(inspect_owned(self.store, attempt["id"])["State"]["Running"])
 
     def test_wall_timeout_terminates_container(self):
         experiment = self.submit("import time\ntime.sleep(60)\n", wall_seconds=1)

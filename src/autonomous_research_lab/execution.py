@@ -422,6 +422,21 @@ def finish(store: Store, attempt: dict, spec: ExperimentSpec, container: dict | 
                                 error=error, execution=execution, result=result)
 
 
+def _record_running(store: Store, attempt_id: str, container: dict) -> dict:
+    attempt = store.get_attempt(attempt_id)
+    if attempt["state"] in {"queued", "starting"}:
+        try:
+            if attempt["state"] == "queued":
+                store.update_attempt(attempt_id, state="starting", expected_states={"queued"})
+            # A short command may finish before its start is observed.
+            store.update_attempt(attempt_id, state="running", expected_states={"starting"},
+                                 started_at=container["State"]["StartedAt"])
+        except LabError:
+            if store.get_attempt(attempt_id)["state"] != "stopping":
+                raise
+    return store.get_attempt(attempt_id)
+
+
 def supervise(store: Store, attempt_id: str, *, recovery: bool = False) -> dict:
     with attempt_lock(store, attempt_id) as acquired:
         if not acquired:
@@ -462,16 +477,7 @@ def supervise(store: Store, attempt_id: str, *, recovery: bool = False) -> dict:
                 # A configured container has never executed. Starting it is safe on recovery.
                 podman("start", container["Id"])
                 container = inspect_owned(store, attempt_id)
-            attempt = store.get_attempt(attempt_id)
-            if attempt["state"] in {"queued", "starting"}:
-                try:
-                    if attempt["state"] == "queued":
-                        store.update_attempt(attempt_id, state="starting", expected_states={"queued"})
-                    # Short commands may already be finished when their start is observed.
-                    store.update_attempt(attempt_id, state="running", expected_states={"starting"}, started_at=container["State"]["StartedAt"])
-                except LabError:
-                    if store.get_attempt(attempt_id)["state"] != "stopping":
-                        raise
+            attempt = _record_running(store, attempt_id, container)
             if container["State"].get("Running"):
                 store.add_event(attempt_id, "supervision_resumed" if recovery else "execution_started", {"container_id": container["Id"]})
             last_saved = 0.0
@@ -506,7 +512,15 @@ def supervise(store: Store, attempt_id: str, *, recovery: bool = False) -> dict:
             # Never release the GPU lease while a possibly-running container is unaccounted for.
             error = f"{type(exc).__name__}: {exc}"
             try:
-                container = terminate_owned(store, attempt_id)
+                container = inspect_owned(store, attempt_id)
+                state_info = container["State"] if container else {}
+                already_finished = (
+                    not state_info.get("Running")
+                    and timestamp(state_info.get("StartedAt")) is not None
+                    and timestamp(state_info.get("FinishedAt")) is not None
+                )
+                if not already_finished:
+                    container = terminate_owned(store, attempt_id)
                 if container and container["State"].get("Running"):
                     raise LabError("Container is still running after termination request")
             except Exception as stop_error:
@@ -517,6 +531,19 @@ def supervise(store: Store, attempt_id: str, *, recovery: bool = False) -> dict:
             current = store.get_attempt(attempt_id)
             if current["state"] in TERMINAL_STATES:
                 return current
+            inspection_timeout = (
+                isinstance(exc, subprocess.TimeoutExpired)
+                and isinstance(exc.cmd, (list, tuple))
+                and list(exc.cmd[1:]) == ["container", "inspect", container_name(attempt_id)]
+            )
+            if inspection_timeout and already_finished:
+                # Observation failed, not execution. No termination was requested;
+                # retain the diagnostic and assess the verified exit normally.
+                store.add_event(attempt_id, "container_observation_timeout",
+                                {"error": error, "container_id": container["Id"],
+                                 "terminal_state": container["State"]})
+                current = _record_running(store, attempt_id, container)
+                return finish(store, current, spec, container, execution)
             return finish(store, current, spec, container, execution, "failed", error)
 
 

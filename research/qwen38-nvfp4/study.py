@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import shutil
 
-from autonomous_research_lab.execution import atomic_json, configuration, configure, run, wait_for_attempt
+from autonomous_research_lab.execution import atomic_json, configuration, configure, inspect_owned, podman, run, wait_for_attempt
 from autonomous_research_lab.models import ExperimentSpec, LabError, Limits, TERMINAL_STATES, read_json
 from autonomous_research_lab.store import Store
 from analysis import SEEDS, analyze, render_report
@@ -249,6 +249,41 @@ def private_item(store, grader, tasks, task_id, split):
     return copied["id"]
 
 
+def retire_completed_grader(store, attempt):
+    """Release Podman bookkeeping only after retaining the completed evidence."""
+    if attempt["state"] != "completed" or attempt["gpu_uuid"] is not None:
+        raise LabError("Only completed CPU grading containers may be retired")
+    if store.get_experiment(attempt["experiment_id"])["manifest"]["gpu"]:
+        raise LabError("A GPU experiment cannot enter grading-container cleanup")
+    container = inspect_owned(store, attempt["id"])
+    if container is None:
+        return
+    state = container["State"]
+    if container["Id"] != attempt["container_id"] or state.get("Running") or state.get("Paused") or state.get("ExitCode") != 0:
+        raise LabError("The recorded grading container is not safely completed")
+    for artifact in attempt["result"]["artifacts"]:
+        artifact_file(store, attempt, artifact["path"])
+    log = store.attempt_dir(attempt["id"]) / "console.log"
+    saved = log.with_name(".console.before-container-removal")
+    if saved.exists() or log.is_symlink() or (log.exists() and not log.is_file()):
+        raise LabError("Unexpected grading-log archive; nothing was removed")
+    log_hash = file_hash(log) if log.exists() else None
+    store.add_event(attempt["id"], "completed_container_archived",
+                    {"container": container, "console_sha256": log_hash})
+    try:
+        if log.exists():
+            log.rename(saved)
+        podman("rm", container["Id"])
+    finally:
+        if saved.exists():
+            if log.exists():
+                raise LabError(f"Unexpected replacement log; retained archive is {saved}")
+            saved.rename(log)
+    if log_hash is not None and file_hash(log) != log_hash:
+        raise LabError("The retained grading log changed")
+    store.add_event(attempt["id"], "completed_container_removed", {"container_id": container["Id"]})
+
+
 def grade(store, label, *, split="compatibility", seed=17, series="baseline"):
     state = store.root / STATE
     frozen = read_json(state / "frozen.json")
@@ -292,6 +327,7 @@ def grade(store, label, *, split="compatibility", seed=17, series="baseline"):
                         "attempt_id": scored["id"], "metrics": outcome["metrics"], "correctness": outcome["details"]["correctness"],
                         "generated_tokens": len(generation["token_ids"]), "generation_seconds": generation["generation_seconds"],
                         "repeated_128_token_block": generation["repeated_128_token_block"], "finish_reason": generation["finish_reason"]})
+        retire_completed_grader(grader, scored)
     summary = {"checkpoint": label, "split": split, "seed": seed, "series": series, "generation_attempt": attempt["id"],
                "grader_root": str(grader.root), "results": results}
     atomic_json(block / "summary.json", summary)

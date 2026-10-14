@@ -88,6 +88,8 @@ The UUID above identifies this project's allocated RTX PRO 6000, not a portable 
 
 `arl stop ATTEMPT_ID --wait` terminates owned work and retains its records. `arl recover --wait` reconciles existing containers after interruption; it does not blindly repeat experiments. `arl list --attempts`, `arl show`, and `arl events` expose the history.
 
+An inspection timeout is retained as a diagnostic. If a subsequent ownership-checked observation confirms that the container has already finished without a termination request, its exit status and output validation determine the outcome. The supervisor does not restart the code or rewrite terminal attempt history.
+
 ### Pinned large-model runtime
 
 `Containerfile.inference` supplies the study's digest-pinned vLLM/PyTorch image. This changes the **experiment runtime**, not the Codex research-agent provider.
@@ -138,6 +140,8 @@ Provisioning downloads public pinned scorer code, hash-locked dependencies, and 
 For an individual compatibility block, use `study.py generate LABEL --series comparison`, then `study.py grade LABEL --series comparison`; labels are `bf16`, `unsloth`, `nvidia`, `radixark`, and `quasar`. Primary blocks additionally require `--split primary --seed SEED`, and generation requires the exact `--wall-seconds` from the cohort plan. One controller owns a series at a time. Repeating a command resumes its recorded immutable attempt, never silently resubmitting a failure. Use a new explicit series for an amended rerun and retain the interrupted series. `study.py analyze --series comparison` recomputes analysis only after every requested primary response has retained scoring evidence.
 
 Receipts and attempt links are under `.arl/studies/qwen38-nvfp4`. The internal `grading-runner` store uses a CPU-only image without changing the dashboard's signed-in workspace or main inference runner. Each grader receives one response and that task's private tests, not checkpoints or credentials. Dataset contents stay in ignored local storage and must not be committed or redistributed as part of this study. Compatibility checks and synthetic scorer controls are not primary quality results.
+
+Completed CPU-grading containers are retired after their final inspection is archived and their output hashes are verified. Records, results, and console logs remain available; container bookkeeping slots do not accumulate across the thousands of responses.
 
 ### Enforced boundaries and limits
 

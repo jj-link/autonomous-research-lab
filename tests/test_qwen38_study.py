@@ -69,6 +69,7 @@ class StudyExecutionTests(unittest.TestCase):
                     "details": {"checkpoint": "nvidia", "split": "primary", "seed": seed}}))
                 artifact(f"seed-{seed}/generations.jsonl", "{}\n")
         self.store.update_attempt(attempt["id"], state="completed" if legacy else "failed",
+                                  container_id=f"container-{attempt['id']}",
                                   result={"artifacts": artifacts, "observations": {"metrics": metrics}})
         record = self.root / "generation.json"
         study.atomic_json(record, {"experiment_id": experiment["id"], "attempt_id": attempt["id"]})
@@ -99,6 +100,33 @@ class StudyExecutionTests(unittest.TestCase):
         self.assertEqual(generations.read_text(), "{}\n")
         with self.assertRaises(LabError):
             study.generation_identity(self.store, record, "nvidia", "primary", 29, "test")
+
+    def test_retiring_completed_container_preserves_logs_and_result_evidence(self):
+        record, output = self.retained_attempt(legacy=True)
+        attempt = self.store.get_attempt(study.read_json(record)["attempt_id"])
+        log = output.parent / "console.log"
+        log.write_text("retained execution log\n")
+        container = {"Id": attempt["container_id"], "State": {"Running": False, "Paused": False, "ExitCode": 0}}
+
+        def remove_container(*args):
+            # A runtime may remove a custom log path with the container.
+            log.unlink(missing_ok=True)
+
+        with patch.object(study, "inspect_owned", return_value=container), patch.object(study, "podman", side_effect=remove_container):
+            study.retire_completed_grader(self.store, attempt)
+        self.assertEqual(log.read_text(), "retained execution log\n")
+        self.assertEqual((output / "generations.jsonl").read_text(), "{}\n")
+        self.assertEqual(self.store.get_attempt(attempt["id"]), attempt)
+        archive = next(event for event in self.store.events(attempt["id"]) if event["kind"] == "completed_container_archived")
+        self.assertEqual(archive["details"]["console_sha256"], hashlib.sha256(log.read_bytes()).hexdigest())
+
+    def test_retirement_cannot_delete_a_container_that_is_still_running(self):
+        record, _ = self.retained_attempt(legacy=True)
+        attempt = self.store.get_attempt(study.read_json(record)["attempt_id"])
+        container = {"Id": attempt["container_id"], "State": {"Running": True, "ExitCode": 0}}
+        with patch.object(study, "inspect_owned", return_value=container), patch.object(study, "podman", side_effect=AssertionError("live container removed")):
+            with self.assertRaises(LabError):
+                study.retire_completed_grader(self.store, attempt)
 
     def test_amendment_excludes_already_submitted_work_without_losing_seeds(self):
         inventory = {"checkpoints": [{"label": "bf16"}, {"label": "nvidia"}]}
