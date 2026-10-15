@@ -57,6 +57,23 @@ class Exploit:
 
 
 class TaskSelectionTests(unittest.TestCase):
+    def test_followup_uses_the_next_ranked_items_without_reusing_evaluated_tasks(self):
+        coding, ifeval = pools(300)
+        original = task_data.prepare_tasks(coding, ifeval)
+        excluded = sum(original["selection"]["coding"].values(), [])
+        followup = task_data.prepare_coding_followup(coding, excluded)
+        expected = sorted(
+            (f"coding/atcoder/task_{index}" for index in range(300)),
+            key=lambda identity: (hashlib.sha256(f"{task_data.NAMESPACE}/{identity}".encode()).hexdigest(), identity),
+        )[136:264]
+        self.assertEqual(followup["selection"]["ids"], expected)
+        self.assertFalse(set(expected) & set(excluded))
+        self.assertEqual(followup, task_data.prepare_coding_followup(reversed(coding), reversed(excluded)))
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            task_data.prepare_coding_followup(coding + [coding[0]], excluded)
+        with self.assertRaisesRegex(ValueError, "absent"):
+            task_data.prepare_coding_followup(coding, excluded + ["coding/atcoder/missing"])
+
     def test_selection_matches_independent_hash_ranking_and_exact_counts(self):
         coding, ifeval = pools()
         result = task_data.prepare_tasks(coding, ifeval)

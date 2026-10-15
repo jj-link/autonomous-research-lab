@@ -111,8 +111,8 @@ def unavailable(row):
 def validate_rows(rows, expected_ids, checkpoints):
     if len(set(checkpoints)) != len(checkpoints) or len(checkpoints) < 2:
         raise ValueError("Checkpoint identities must be distinct")
-    if set(expected_ids) != {"coding", "ifeval"}:
-        raise ValueError("Both task families are required")
+    if not expected_ids or not set(expected_ids) <= {"coding", "ifeval"}:
+        raise ValueError("At least one supported task family is required")
     for family, ids in expected_ids.items():
         if not ids or len(ids) != len(set(ids)) or any(not identity.startswith(family + "/") for identity in ids):
             raise ValueError("Frozen item identities are invalid")
@@ -158,6 +158,31 @@ def validate_rows(rows, expected_ids, checkpoints):
     if set(indexed) != wanted:
         raise ValueError(f"Incomplete comparison: missing {len(wanted - set(indexed))} requested responses")
     return indexed
+
+
+def select_throughput(cases, checkpoints):
+    """Choose one common engine by total output tokens / total generation time."""
+    wanted = {(mode, label) for mode in ("plain", "dflash") for label in checkpoints}
+    indexed = {}
+    for case in cases:
+        key = (case["mode"], case["checkpoint"])
+        if key not in wanted or key in indexed:
+            raise ValueError("Unexpected or duplicate throughput comparison cell")
+        if (type(case["generated_tokens"]) is not int or case["generated_tokens"] <= 0
+                or not math.isfinite(case["generation_wall_seconds"]) or case["generation_wall_seconds"] <= 0):
+            raise ValueError("Invalid measured throughput numerator or duration")
+        indexed[key] = case
+    if not checkpoints or set(indexed) != wanted:
+        raise ValueError("Throughput comparison is incomplete")
+    modes = {}
+    for mode in ("plain", "dflash"):
+        tokens = sum(indexed[mode, label]["generated_tokens"] for label in checkpoints)
+        seconds = sum(indexed[mode, label]["generation_wall_seconds"] for label in checkpoints)
+        modes[mode] = {"generated_tokens": tokens, "generation_wall_seconds": seconds,
+                       "aggregate_tokens_per_second": tokens / seconds}
+    winner = max(modes, key=lambda mode: (modes[mode]["aggregate_tokens_per_second"], mode == "plain"))
+    return {"winner": winner, "modes": modes, "cases": cases,
+            "selection_rule": "total generated tokens / total generation wall seconds across all checkpoints; plain on an exact tie"}
 
 
 def analyze(rows, expected_ids, checkpoints, *, resamples=RESAMPLES):
@@ -259,7 +284,7 @@ def render_report(result):
                 lines.append(f"| {label} | {percent(secondary['strict_instruction_rate'])} | {percent(secondary['loose_instruction_rate'])} | {percent(secondary['loose_prompt_rate'])} |")
         lines.append("")
     lines += ["## Interpretation limits", "",
-              "- Bootstrap resampling uses whole items, not repeated responses as independent observations. Ten pairwise contrasts per family use 99.5% intervals in addition to nominal 95% intervals.",
+              "- Bootstrap resampling uses whole items, not repeated responses as independent observations. Pairwise contrasts use conservative 99.5% intervals in addition to nominal 95% intervals.",
               "- An interval crossing zero is not evidence of equality. Equivalence is withheld for degenerate intervals or fewer than ten discordant items.",
               "- Every requested response stays in the observed-pass denominator. Unavailable scorer evidence is not called a wrong answer; affected correctness contrasts remain inconclusive, with paired complete-case sensitivity in analysis.json. Missingness may be informative.",
               "- Completion and correctness are separate outcomes. Truncated but extractable answers can pass; repetition is a diagnostic, not an automatic correctness failure.",

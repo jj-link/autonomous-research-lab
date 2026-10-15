@@ -145,6 +145,36 @@ class PairedAnalysisTests(unittest.TestCase):
         reversed_rows = analysis.analyze(list(reversed(rows)), expected, ["reference", "candidate"], resamples=100)
         self.assertEqual(original, reversed_rows)
 
+    def test_coding_only_followup_retains_paired_inventory_and_denominator(self):
+        expected, rows = fixture()
+        rows = [row for row in rows if row["family"] == "coding"]
+        rows[0]["correctness"] = False
+        rows[0]["metrics"]["correct"] = 0
+        expected = {"coding": expected["coding"]}
+        result = analysis.analyze(rows, expected, ["reference", "candidate"], resamples=100)
+        self.assertEqual(result["requested_responses"], 12)
+        self.assertAlmostEqual(result["families"]["coding"]["models"]["reference"]["observed_pass_rate"], 5 / 6)
+        with self.assertRaisesRegex(ValueError, "missing 1"):
+            analysis.analyze(rows[:-1], expected, ["reference", "candidate"], resamples=100)
+
+    def test_engine_choice_uses_total_time_not_average_checkpoint_rates(self):
+        cases = [
+            {"mode": mode, "checkpoint": label, "generated_tokens": 1000, "generation_wall_seconds": seconds}
+            for mode, timings in (("plain", (1, 1000)), ("dflash", (10, 10)))
+            for label, seconds in zip(("reference", "candidate"), timings)
+        ]
+        result = analysis.select_throughput(cases, ("reference", "candidate"))
+        self.assertEqual(result["winner"], "dflash")
+        self.assertEqual(result["modes"]["dflash"]["aggregate_tokens_per_second"], 100)
+        self.assertAlmostEqual(result["modes"]["plain"]["aggregate_tokens_per_second"], 2000 / 1001)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            analysis.select_throughput(cases[:-1], ("reference", "candidate"))
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            analysis.select_throughput(cases + [cases[0]], ("reference", "candidate"))
+        cases[0]["generation_wall_seconds"] = math.nan
+        with self.assertRaisesRegex(ValueError, "duration"):
+            analysis.select_throughput(cases, ("reference", "candidate"))
+
 
 if __name__ == "__main__":
     unittest.main()

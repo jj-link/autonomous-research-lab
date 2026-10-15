@@ -236,7 +236,7 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_secon
     tasks = frozen["tasks"]
     sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
                 "presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0,
-                "max_tokens": 16384, "seed": seed, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
+                "max_tokens": settings.get("max_output_tokens", 16384), "seed": seed, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
     errors = recorded = generated_tokens = 0
     engine = llm.llm_engine
     pending, submitted = {}, {}
@@ -251,7 +251,7 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_secon
                             "revision": settings["revision"], "split": frozen["split"], "seed": seed,
                             "engine_initialization_seed": engine_args["seed"], "sampling": sampling,
                             "thinking_enabled": frozen["thinking_enabled"], "reasoning_effort": frozen["reasoning_effort"],
-                            "max_model_len": 32768, "kv_cache_dtype": "bfloat16",
+                            "max_model_len": engine_args["max_model_len"], "kv_cache_dtype": engine_args["kv_cache_dtype"],
                             "runtime_path": "../runtime.json", "warmup_path": "../warmup.json",
                             "request_latency_includes_queue": True,
                             "throughput_interval": "first submission through last durable completion",

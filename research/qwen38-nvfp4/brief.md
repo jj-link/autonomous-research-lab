@@ -134,6 +134,21 @@ Examples of justified choices:
 
 The selected follow-up cites the initial measurements and acknowledges alternative explanations. If none is feasible within the allocation, retain the candidates and stop with an explicit reason; do not substitute an unrelated toy experiment.
 
+### Approved 100,000-token coding follow-up
+
+The original coding comparison frequently reached its 16,384-token output limit. Compare BF16, RadixArk, and QUASAR on **128 previously unused coding items**, with seeds 17, 29, and 43: **1,152 scored responses**. Select the next 128 items in the original deterministic hash ranking after excluding all 136 compatibility and primary coding items. Keep the original tokenizer, chat template, sampling parameters, thinking mode, official tests, and whole-item paired analysis. Retain the conservative 99.5% intervals for the three checkpoint contrasts.
+
+- Allow 100,000 generated tokens per request within a 131,072-token context. Preserve natural stops, capped answers, complete reasoning, and failures; do not substitute short timing windows or forced synthetic contexts.
+- Use the retained vLLM 0.28.0/CUDA 12.9 runtime on the allocated RTX PRO 6000, with FP8 KV cache in both serving modes. Use checkpoint-provided KV scales where available and runtime defaults otherwise, without a separate calibration experiment. Both modes use Model Runner V2, the supported WSL pinned-memory opt-in, CUDA graphs, chunked prefill, and no prefix caching or CPU quota.
+- Queue the entire 128-item seed block with `max_num_seqs=128`; let the KV-cache scheduler determine resident concurrency rather than impose the old four-request cap. Record actual cache capacity in tokens and charge preemption/recomputation to elapsed time. The queue limit is **not** a claim that 128 simultaneous 100,000-token contexts fit.
+- Compare no speculation against DFlash2 with seven proposed tokens on the complete seed-17 block for **each** checkpoint. Choose one common mode by total generated tokens divided by total generation wall time across all three checkpoints, not by averaging checkpoint rates. Time from first submission through last durable completion, including prefill; record loading and warmup separately. An exact tie selects no speculation.
+- Make that choice before grading. Reuse the winning mode's complete seed-17 answers, then run seeds 29 and 43 with that mode. Preserve the losing comparison's outputs and costs without mixing its answers into the quality analysis.
+- Keep private tests out of inference workers. Mount each long response separately in its isolated grading worker instead of embedding large answer bodies in experiment manifests.
+
+Run `research/qwen38-nvfp4/followup.py run-all` through the project's WSL Python environment. The frozen protocol, comparison selection, grading records, and final `analysis.json` belong under `.arl/studies/qwen38-nvfp4/followup-fp8/`; the existing isolated runner retains immutable inference bundles and outputs. Do not create additional narrative run logs or put execution history in the project plan.
+
+Interpretation: the new tasks, FP8 KV cache, and runtime differ from the original comparison. This measures the three released checkpoints under the new common conditions; it does **not** isolate the causal effect of a larger output allowance or establish that FP8 cache preserves the original accuracy.
+
 ## Launch requirements and completion criteria
 
 Before launching the full comparison:

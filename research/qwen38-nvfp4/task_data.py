@@ -310,3 +310,30 @@ def prepare_tasks(coding_rows, ifeval_rows):
                 private[split].append(hidden)
                 selection[family][split].append(visible["id"])
     return {"public": public, "private": private, "selection": selection}
+
+
+def prepare_coding_followup(coding_rows, excluded):
+    """Take the next 128 coding items in the original outcome-independent rank."""
+    excluded = set(excluded)
+    seen = set()
+    ranked = []
+    for row in coding_rows:
+        visible, hidden = _coding(row)
+        identity = visible["id"]
+        if identity in seen:
+            raise ValueError(f"Duplicate coding dataset ID: {identity}")
+        seen.add(identity)
+        if identity in excluded:
+            continue
+        dataset_id = visible["dataset_id"]
+        rank = hashlib.sha256(f"{NAMESPACE}/coding/{dataset_id}".encode("utf-8")).hexdigest()
+        insort(ranked, (rank, dataset_id, visible, hidden))
+        if len(ranked) > PRIMARY_COUNT:
+            ranked.pop()
+    if not excluded <= seen:
+        raise ValueError("Previously selected coding identities are absent from the pinned dataset")
+    if len(ranked) != PRIMARY_COUNT:
+        raise ValueError("Insufficient unseen coding items for the complete follow-up")
+    return {"public": [entry[2] for entry in ranked], "private": [entry[3] for entry in ranked],
+            "selection": {"namespace": NAMESPACE, "rank": "sha256_utf8_then_dataset_id",
+                          "excluded": sorted(excluded), "ids": [entry[2]["id"] for entry in ranked]}}
