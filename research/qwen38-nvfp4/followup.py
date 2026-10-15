@@ -28,6 +28,7 @@ MODES = ("plain", "dflash")
 IMAGE = "27e2c317d7b13ac6d7afe0642b350e5ef98c7206109bf7f59dfba20e41c20199"
 GPU = "GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309"
 DRAFT_REVISION = "015e795645c74b1a0eeef3b570031fb62e769bc5"
+EXECUTION_REVISION = 2
 
 
 def stores():
@@ -139,7 +140,7 @@ def model_input(store, label):
 
 
 def generation_path(label, mode, stage):
-    return STATE / "runs" / label / mode / f"{stage}.json"
+    return STATE / "runs" / label / mode / f"{stage}-r{EXECUTION_REVISION}.json"
 
 
 def generate(store, protocol, label, mode, seeds, stage):
@@ -152,6 +153,7 @@ def generate(store, protocol, label, mode, seeds, stage):
     speculative = {"method": "dflash", "model": "/inputs/draft", "num_speculative_tokens": 7} if mode == "dflash" else None
     settings = {"checkpoint": label, "repo_id": checkpoint["repo_id"], "revision": checkpoint["revision"],
                 "split": "followup", "seeds": list(seeds), "max_output_tokens": protocol["max_output_tokens"],
+                "execution_revision": EXECUTION_REVISION,
                 "dflash": mode == "dflash", "drafter_revision": DRAFT_REVISION if mode == "dflash" else None,
                 "runtime_env": {"VLLM_USE_V2_MODEL_RUNNER": "1", "VLLM_WSL2_ENABLE_PIN_MEMORY": "1"},
                 "engine_options": {**ENGINE_OPTIONS, "max_num_seqs": protocol["items"], "speculative_config": speculative}}

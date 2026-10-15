@@ -48,6 +48,13 @@ def counter(metrics, name):
     return sum(values)
 
 
+def followup_arguments(settings):
+    args = engine_arguments(settings)
+    args.update(max_model_len=131072, kv_cache_dtype="fp8",
+                safetensors_load_strategy="eager", worker_extension_cls="long_generate.LongMetadata")
+    return args
+
+
 def main():
     settings = json.loads(Path("/experiment/settings.json").read_text())
     os.environ.update(settings["runtime_env"])
@@ -75,9 +82,7 @@ def main():
                 or tokenizer.encode(task["prompt"], add_special_tokens=False) != task["prompt_token_ids"]
                 or len(task["prompt_token_ids"]) + settings["max_output_tokens"] > 131072):
             raise ValueError(f"Frozen prompt identity or context differs: {task['id']}")
-    args = engine_arguments(settings)
-    args.update(max_model_len=131072, kv_cache_dtype="fp8", calculate_kv_scales=False,
-                safetensors_load_strategy="eager", worker_extension_cls="long_generate.LongMetadata")
+    args = followup_arguments(settings)
     started = time.monotonic()
     llm = LLM(**args)
     load_seconds = time.monotonic() - started
