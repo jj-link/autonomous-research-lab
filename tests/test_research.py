@@ -154,6 +154,66 @@ class ResearchTests(unittest.TestCase):
                 self.assertIsNone(implementation["experiment_id"])
                 self.assertEqual(self.engine.store.list_experiments(), [])
 
+    def test_builder_can_inspect_selected_source_without_creating_an_experiment(self):
+        source = self.folder / "reviewed-source"
+        source.mkdir()
+        contents = "def reviewed_value():\n    return 7\n"
+        (source / "reviewed.py").write_text(contents)
+        input_id = self.engine.store.register_input(source, "reviewed-source")["id"]
+        design = {"id": new_id("design"), "question": "Use the reviewed source", "procedure": "Import the approved module",
+                  "resources": self.program["brief"]["resources"], "inputs": {"reviewed": input_id}}
+        self.pending({"action": "read_inputs", "inputs": [{"input": "reviewed", "path": "reviewed.py"}]}, role="builder")
+        self.engine._change(self.id, lambda p: p.update(phase="build", designs=[design], selected_design_id=design["id"]))
+        self.engine._build(self.id)
+        program = self.engine.get(self.id)
+        self.assertEqual(program["requested_records"][0]["text"], contents)
+        self.assertEqual(program["phase"], "build")
+        self.assertIsNone(program["pending_call_id"])
+        self.assertEqual(program["usage"]["model_calls"], 1)
+        self.assertEqual(program["usage"]["implementation_attempts"], 0)
+        self.assertEqual(program["usage"]["attempts"], 0)
+        self.assertEqual(self.engine.store.list_experiments(), [])
+
+    def test_builder_input_inventories_are_pageable_and_scoped_to_selected_aliases(self):
+        source = self.folder / "source-inventory"
+        source.mkdir()
+        for number in range(65):
+            (source / f"{number:03}.py").write_text(f"value = {number}\n")
+        input_id = self.engine.store.register_input(source, "source-inventory")["id"]
+        bindings = {"selected": input_id}
+        initial = self.engine._builder_input_records(bindings)["selected"]
+        self.assertTrue(initial["files_truncated"])
+        page, = self.engine._read_builder_inputs(bindings, [{"input": "selected", "offset_files": 64}])
+        self.assertEqual([item["path"] for item in page["files"]], ["064.py"])
+        self.assertFalse(page["truncated"])
+        self.assertEqual(page["next_offset_files"], 65)
+        for request in ({"input": input_id}, {"input": "unselected"}, {"input": "selected", "offset_files": 66},
+                        {"input": "selected", "max_files": 65}, {"input": "selected", "offset_files": -1},
+                        {"input": "selected", "path": "064.py", "offset_files": 0}):
+            with self.subTest(request=request), self.assertRaises(LabError):
+                self.engine._read_builder_inputs(bindings, [request])
+
+    def test_registered_input_reads_reject_changed_linked_or_unlisted_files(self):
+        source = self.folder / "readable-input"
+        source.mkdir()
+        path = source / "value.json"
+        path.write_text('{"value":7}')
+        input_id = self.engine.store.register_input(source, "readable-input")["id"]
+        self.assertEqual(json.loads(self.engine.store.read_input_file(input_id, "value.json")["text"]), {"value": 7})
+        path.write_text('{"value":8}')
+        with self.assertRaises(LabError):
+            self.engine.store.read_input_file(input_id, "value.json")
+        outside = self.folder / "outside-input.json"
+        outside.write_text('{"value":7}')
+        path.unlink()
+        path.symlink_to(outside)
+        with self.assertRaises((OSError, LabError)):
+            self.engine.store.read_input_file(input_id, "value.json")
+        (source / "unlisted.json").write_text('{"value":7}')
+        for relative in ("unlisted.json", "../outside-input.json"):
+            with self.subTest(relative=relative), self.assertRaises(LabError):
+                self.engine.store.read_input_file(input_id, relative)
+
     def recorded_attempt(self, *, inputs=None, metrics=None, outputs=None, scratch="not a declared handoff"):
         code = self.folder / uuid.uuid4().hex
         code.mkdir()

@@ -156,6 +156,25 @@ def _open_regular(base: Path, relative: str, *, exclude_stores=False) -> int:
         os.close(directory)
 
 
+def _read_recorded_file(base, relative, record, offset_bytes, max_bytes):
+    if type(offset_bytes) is not int or offset_bytes < 0 or type(max_bytes) is not int or not 1 <= max_bytes <= 65536:
+        raise LabError("Recorded file reads require a nonnegative byte offset and at most 65536 bytes")
+    with os.fdopen(_open_regular(base, relative), "rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size != record["bytes"] or offset_bytes > size:
+            raise LabError("Recorded file size changed or requested offset is outside the file")
+        digest = hashlib.sha256()
+        while chunk := stream.read(262144):
+            digest.update(chunk)
+        if digest.hexdigest() != record["sha256"]:
+            raise LabError("File no longer matches its recorded hash")
+        stream.seek(offset_bytes)
+        content = stream.read(max_bytes)
+    return {"path": record["path"], "sha256": record["sha256"], "bytes": size,
+            "offset_bytes": offset_bytes, "next_offset_bytes": offset_bytes + len(content),
+            "truncated": offset_bytes + len(content) < size, "text": content.decode("utf-8", errors="replace")}
+
+
 def _regular(meta):
     return stat.S_ISREG(meta.st_mode) and not (getattr(meta, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
@@ -493,8 +512,6 @@ class Store:
 
     def read_artifact(self, attempt_id, relative, *, offset_bytes=0, max_bytes=32768):
         """Read bounded, hash-verified recorded evidence, never arbitrary host files."""
-        if type(offset_bytes) is not int or offset_bytes < 0 or type(max_bytes) is not int or not 1 <= max_bytes <= 65536:
-            raise LabError("Artifact reads require a nonnegative byte offset and at most 65536 bytes")
         attempt = self.get_attempt(attempt_id)
         if attempt["state"] not in TERMINAL_STATES:
             raise LabError("Artifacts are readable only after execution is terminal")
@@ -502,20 +519,8 @@ class Store:
         artifact = next((item for item in (attempt.get("result") or {}).get("artifacts", []) if item["path"] == relative), None)
         if artifact is None:
             raise LabError("Artifact is not in the execution's recorded inventory")
-        with os.fdopen(_open_regular(self.root, f"runs/{attempt_id}/output/{relative}"), "rb") as stream:
-            size = os.fstat(stream.fileno()).st_size
-            if size != artifact["bytes"] or offset_bytes > size:
-                raise LabError("Artifact size changed or requested offset is outside the file")
-            digest = hashlib.sha256()
-            while chunk := stream.read(262144):
-                digest.update(chunk)
-            if digest.hexdigest() != artifact["sha256"]:
-                raise LabError("Artifact no longer matches its recorded hash")
-            stream.seek(offset_bytes)
-            content = stream.read(max_bytes)
-        return {"attempt_id": attempt_id, "path": relative, "sha256": artifact["sha256"], "bytes": size,
-                "offset_bytes": offset_bytes, "next_offset_bytes": offset_bytes + len(content),
-                "truncated": offset_bytes + len(content) < size, "text": content.decode("utf-8", errors="replace")}
+        return {"attempt_id": attempt_id, **_read_recorded_file(
+            self.root, f"runs/{attempt_id}/output/{relative}", artifact, offset_bytes, max_bytes)}
 
     def register_input(self, path, name, *, expected_hashes=None):
         if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", name):
@@ -553,6 +558,16 @@ class Store:
 
     def input_source(self, input_id):
         return _input_directory(self.get_input(input_id)["source"])
+
+    def read_input_file(self, input_id, relative, *, offset_bytes=0, max_bytes=32768):
+        """Read a registered file against its approved inventory, without exposing host paths."""
+        record = self.get_input(input_id)
+        relative = relative_path(relative, "Input file path")
+        file = next((item for item in record["files"] if item["path"] == relative), None)
+        if file is None:
+            raise LabError("File is not in the approved input inventory")
+        return {"input_id": input_id, **_read_recorded_file(
+            _input_directory(record["source"]), relative, file, offset_bytes, max_bytes)}
 
     def resolve_inputs(self, bindings, *, verify=False):
         result = {}

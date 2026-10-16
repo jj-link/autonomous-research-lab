@@ -681,6 +681,40 @@ class ResearchEngine:
             release_checkpoint_cache(self.store, cached_id or cache["source_input_id"], cache["root"])
         self._change(program_id, lambda p: next(d for d in p["designs"] if d["id"] == design["id"])["cache"].update(released=True))
 
+    def _builder_input_records(self, bindings):
+        records = self.store.resolve_inputs(bindings)
+        for record in records.values():
+            files = self.store.get_input(record["id"])["files"]
+            record.update(files=files[:64], files_truncated=len(files) > 64)
+        return records
+
+    def _read_builder_inputs(self, bindings, requests):
+        if not isinstance(requests, list) or not 1 <= len(requests) <= 3:
+            raise LabError("Builder input inspection requires 1–3 requests")
+        records = []
+        for request in requests:
+            require_keys(request, {"input", "path", "offset_bytes", "max_bytes", "offset_files", "max_files"}, "builder input request")
+            alias = request.get("input")
+            if not isinstance(alias, str) or alias not in bindings:
+                raise LabError("Builder can inspect only the selected design's input aliases")
+            if "path" in request:
+                require_keys(request, {"input", "path", "offset_bytes", "max_bytes"}, "input file request")
+                record = self.store.read_input_file(bindings[alias], request["path"],
+                                                   offset_bytes=request.get("offset_bytes", 0), max_bytes=request.get("max_bytes", 32768))
+            else:
+                require_keys(request, {"input", "offset_files", "max_files"}, "input inventory request")
+                offset, count = request.get("offset_files", 0), request.get("max_files", 64)
+                if type(offset) is not int or offset < 0 or type(count) is not int or not 1 <= count <= 64:
+                    raise LabError("Input inventories require a nonnegative offset and at most 64 files")
+                files = self.store.get_input(bindings[alias])["files"]
+                if offset > len(files):
+                    raise LabError("Input inventory offset is outside the recorded file list")
+                page = files[offset:offset + count]
+                record = {"input_id": bindings[alias], "files": page, "file_count": len(files),
+                          "next_offset_files": offset + len(page), "truncated": offset + len(page) < len(files)}
+            records.append({"input": alias, **record})
+        return records
+
     def _build(self, program_id):
         program = self.get(program_id)
         design = next(d for d in program["designs"] if d["id"] == program["selected_design_id"])
@@ -697,10 +731,15 @@ class ResearchEngine:
         if design.get("runtime"):
             environment.update(environment["runtimes"][design["runtime"]])
         response = self._call(program_id, "builder", {"design": design, "environment": environment, "approved_data": program["brief"]["data_files"],
-                                                     "approved_inputs": self.store.resolve_inputs(approved_inputs), "prior_implementations": previous,
+                                                     "approved_inputs": self._builder_input_records(approved_inputs), "prior_implementations": previous,
+                                                     "requested_records": program["requested_records"],
                                                      "permissions": {"max_parallel_workers": program["brief"].get("max_parallel_workers", 1),
                                                                      "resources": program["brief"]["resources"],
                                                                      "remaining_attempts": program["brief"]["max_experiments"] - program["usage"]["attempts"]}})
+        if response.get("action") == "read_inputs":
+            records = self._read_builder_inputs(approved_inputs, response.get("inputs"))
+            self._patch(program_id, requested_records=records, pending_call_id=None)
+            return
         call_id = self.get(program_id)["pending_call_id"]
         implementation = next((i for i in prior if i["call_id"] == call_id), None)
         if implementation is None:

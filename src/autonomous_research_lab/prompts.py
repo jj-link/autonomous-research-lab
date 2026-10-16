@@ -58,6 +58,13 @@ Use ARL_SETTINGS for the read-only JSON settings file and /workspace for outputs
 Use the supplied approved_inputs aliases; the coordinator binds their registered IDs without requiring you to copy them.
 These approved large inputs are mounted read-only at the supplied /inputs/<alias> paths, also exposed in the ARL_INPUTS JSON environment variable.
 You cannot register inputs, change their paths, select unapproved IDs, or write into them. Cache/scratch files belong under /workspace.
+Before implementing a dependency, inspect its selected input inventory and source rather than guessing filenames or exports.
+Instead of an implementation, you may return {action:"read_inputs",inputs:[{input:"alias",path:"relative/file",offset_bytes:0,max_bytes:65536}]}.
+Omit path and use offset_files/max_files to page an input's recorded inventory (at most 64 files per page).
+Up to three requests per call; only selected aliases are readable, and file contents are hash-verified against their approved inventory.
+The next builder call receives these results in requested_records. Each request replaces that read context: request needed pages together.
+Inspection consumes model calls but creates no implementation or worker and does not consume a repair attempt.
+Do not submit a worker whose only purpose is to report missing source access; inspect the selected input first.
 Guard multiprocessing/inference entrypoints with if __name__ == "__main__" where required by the declared runtime.
 Never generate files under data/: the coordinator supplies those immutable inputs. Write results.json containing {metrics:{name:number},details:{...}}.
 Include raw trial measurements, seeds, reference computations and limitations as needed. Expected output names must include results.json.
