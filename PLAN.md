@@ -4,6 +4,46 @@ This document describes planned behavior, not implemented functionality or demon
 
 **The central design decision: the system manages an ongoing research program, not a collection of disconnected prompts or experiment runs.** Every new experiment starts from the research goal and accumulated findings.
 
+## Current priority: redo the Qwen3.8 follow-up through the autonomous lab
+
+**Purpose:** test the autonomous research lab end to end. Producing model answers and scores through a separate study script does not satisfy this task.
+
+### Scope and execution boundary
+
+- Redo the approved follow-up: BF16, RadixArk NVFP4, and QUASAR NVFP4; the approved 128-task coding cohort; seeds 17, 29, and 43; 100,000 output tokens within a 131,072-token context. Generate and grade all **1,152 responses afresh**.
+- Preserve the chosen serving conditions: the allocated RTX PRO 6000, FP8 KV cache, no DFlash, and a 128-request scheduler cap with cache-managed resident concurrency. Do not add another serving-speed comparison.
+- Use the existing workspace and signed-in Codex provider for research agents. Resolve and record model assignments through the lab; do not silently substitute local models.
+- Keep the manually orchestrated follow-up separate. Its responses, scores, and conclusions must not be imported as this autonomous run's results or presented as evidence that the lab worked.
+- The assistant may configure, test, and repair the lab. The lab's coordinator and research agents must produce the design, implementation, interpretation, report, and follow-up designs and control experiment execution.
+- Do not launch `research/qwen38-nvfp4/followup.py` as an alternative research controller. Wrapping that driver in a nominal lab run does not satisfy autonomy. Existing datasets, model files, and worker utilities may be reused through the lab's normal tooling; the complete research workflow may not be supplied by the assistant.
+
+### Ordered work and acceptance gates
+
+1. **Trace the real workflow before launching GPU work.**
+   - [ ] Identify the normal study-submission entrypoint and trace coordinator transitions through design, implementation, execution, grading, analysis, reporting, and follow-up design.
+   - [ ] Verify how the existing workspace, provider, approved inputs, and allocated GPU are bound to a research program.
+   - **Gate:** the submission must create a coordinator-owned program whose agent calls and experiments are linked in the lab's records. A standalone worker attempt or script process is insufficient.
+
+2. **Repair product blockers without substituting for research agents.**
+   - [ ] Fix missing or broken coordinator/tool/reporting integration required by this study, following the existing architecture.
+   - [ ] Verify the affected behavior and commit and push coherent fixes before the full run.
+   - **Gate:** each required stage is reachable through the coordinator. If a stage fails, repair that path rather than completing the stage manually outside the lab.
+
+3. **Run the fresh study through that coordinator.**
+   - [ ] Submit the bounded research brief through the normal lab entrypoint.
+   - [ ] Have the lab produce and retain its design and implementation, execute all requested conditions, and grade the fresh responses.
+   - [ ] Have the lab analyze its collected evidence and produce both a refinement-oriented follow-up design and a related research-direction design.
+   - **Gate:** no omitted checkpoints, tasks, or seeds; no reused manual-run answers or grades; no assistant-authored replacement for the analyst or research director's output. Producing follow-up designs does not authorize executing additional studies.
+
+4. **Verify the user-facing research deliverable.**
+   - [ ] Verify the full 1,152-response inventory and the links between the program, agent calls, designs, executions, grades, analysis, report, and follow-up designs.
+   - [ ] Open the actual lab interface and verify that the completed study exposes a readable report answering the question, explaining uncertainty and limitations, and linking its supporting evidence. Raw JSON and a chat summary are not substitutes.
+   - [ ] Verify that the lab records its completion/stopping reason and any interventions or failures truthfully; do not label a manually completed stage autonomous.
+   - [ ] Commit and push remaining permanent changes at the completion milestone.
+   - **Completion gate:** the autonomous workflow and its readable in-lab deliverable must both be demonstrated. Successful inference, a finished script, or an analysis file alone is not completion.
+
+This section is the work plan and acceptance criteria. Keep execution histories, measurements, run identifiers, and failure details in the lab's research records, not in this plan.
+
 ## 1. What the user gives the system
 
 The starting point is a **research brief** containing:
