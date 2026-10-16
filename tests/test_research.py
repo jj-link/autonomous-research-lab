@@ -178,6 +178,70 @@ class ResearchTests(unittest.TestCase):
         self.engine._change(self.id, lambda p: p["implementations"].append(implementation))
         return implementation, attempt
 
+    def test_recorded_artifact_can_be_read_in_bounded_pages(self):
+        _, attempt = self.recorded_attempt()
+        first = self.engine.store.read_artifact(attempt["id"], "results.json", max_bytes=5)
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["next_offset_bytes"], 5)
+        rest = self.engine.store.read_artifact(attempt["id"], "results.json", offset_bytes=5)
+        self.assertFalse(rest["truncated"])
+        self.assertEqual(json.loads(first["text"] + rest["text"]), {"metrics": {"observed": 7}})
+        for options in ({"offset_bytes": -1}, {"offset_bytes": first["bytes"] + 1}, {"max_bytes": 65537}):
+            with self.subTest(options=options), self.assertRaises(LabError):
+                self.engine.store.read_artifact(attempt["id"], "results.json", **options)
+
+    def test_artifact_reads_reject_changed_unlisted_or_linked_evidence(self):
+        _, attempt = self.recorded_attempt()
+        path = self.engine.store.attempt_dir(attempt["id"]) / "output" / "results.json"
+        original = path.read_text()
+        path.write_text(original.replace("7", "8"))
+        with self.assertRaises(LabError):
+            self.engine.store.read_artifact(attempt["id"], "results.json")
+        outside = self.folder / "outside.json"
+        outside.write_text(original)
+        path.unlink()
+        path.symlink_to(outside)
+        with self.assertRaises((OSError, LabError)):
+            self.engine.store.read_artifact(attempt["id"], "results.json")
+        with self.assertRaises(LabError):
+            self.engine.store.read_artifact(attempt["id"], "../outside.json")
+        with self.assertRaises(LabError):
+            self.engine.store.read_artifact(attempt["id"], "unlisted.json")
+
+    def test_director_can_read_evidence_but_not_another_programs_artifacts(self):
+        _, attempt = self.recorded_attempt()
+        request = {"action": "read_artifacts", "rationale": "Inspect the measured result", "evidence_refs": [],
+                   "artifacts": [{"attempt_id": attempt["id"], "path": "results.json"}]}
+        self.pending(request)
+        self.engine._decision(self.id)
+        recorded = self.engine.get(self.id)
+        self.assertEqual(json.loads(recorded["requested_records"][0]["text"]), {"metrics": {"observed": 7}})
+        self.assertEqual(recorded["decisions"][-1]["artifacts"], request["artifacts"])
+        other = self.engine.create({"goal": "An unrelated program",
+                                    "model": {"base_url": "https://api.example.com/v1", "model": "protocol-fixture"}})
+        self.id = other["id"]
+        self.pending(request)
+        with self.assertRaises(LabError):
+            self.engine._decision(self.id)
+        self.assertEqual(self.engine.get(self.id)["requested_records"], [])
+
+    def test_followup_can_cite_an_individual_batch_execution(self):
+        implementation, attempt = self.recorded_attempt()
+        def nest(p):
+            item = p["implementations"][0]
+            item.update(attempt_id=None, experiment_id=None,
+                        jobs=[{"attempt_id": attempt["id"], "experiment_id": implementation["experiment_id"]}],
+                        batch_record={"id": implementation["id"], "state": "completed"})
+        self.engine._change(self.id, nest)
+        candidate = {key: "Use the observed child result" for key in (
+            "question", "motivation", "procedure", "measurements", "interpretation", "requirements", "relationship")}
+        candidate.update(parent_question_id=self.program["questions"][0]["id"], evidence_refs=[attempt["id"]],
+                         resources=self.program["brief"]["resources"])
+        self.pending({"action": "experiment", "rationale": "Follow the recorded child execution",
+                      "evidence_refs": [attempt["id"]], "candidates": [candidate]})
+        self.engine._decision(self.id)
+        self.assertEqual(self.engine.get(self.id)["designs"][0]["evidence_refs"], [attempt["id"]])
+
     def test_handoff_excludes_scratch_and_preserves_private_lineage(self):
         directory = self.folder / "private"
         directory.mkdir()

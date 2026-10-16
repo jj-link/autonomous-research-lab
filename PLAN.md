@@ -26,11 +26,11 @@ This document describes planned behavior, not implemented functionality or demon
 
 2. **Repair product blockers without substituting for research agents.**
    - [x] Fix missing or broken coordinator/tool/reporting integration required by this study, following the existing architecture.
-   - [ ] Verify the affected behavior and commit and push coherent fixes before the full run.
+   - [x] Verify the affected behavior and commit and push coherent fixes before the full run.
    - **Gate:** each required stage is reachable through the coordinator. If a stage fails, repair that path rather than completing the stage manually outside the lab.
 
 3. **Run the fresh study through that coordinator.**
-   - [ ] Submit the bounded research brief through the normal lab entrypoint.
+   - [x] Submit the bounded research brief through the normal lab entrypoint.
    - [ ] Have the lab produce and retain its design and implementation, execute all requested conditions, and grade the fresh responses.
    - [ ] Have the lab analyze its collected evidence and produce both a refinement-oriented follow-up design and a related research-direction design.
    - **Gate:** no omitted checkpoints, tasks, or seeds; no reused manual-run answers or grades; no assistant-authored replacement for the analyst or research director's output. Producing follow-up designs does not authorize executing additional studies.

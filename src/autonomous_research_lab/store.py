@@ -6,14 +6,14 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import sqlite3
 import stat
 import uuid
 
-from .models import ACTIVE_STATES, ALL_STATES, TERMINAL_STATES, ExperimentSpec, LabError, canonical_json, input_bindings, normalize_gpu_uuid
+from .models import ACTIVE_STATES, ALL_STATES, TERMINAL_STATES, ExperimentSpec, LabError, canonical_json, input_bindings, normalize_gpu_uuid, relative_path
 
 MAX_BUNDLE_BYTES = 256 * 1024**2
 TRANSITIONS = {
@@ -116,6 +116,44 @@ def _validate_study_lineage(parents):
             path.add(current)
             current = parents[current]
         visited.update(path)
+
+
+def _open_directory(base: Path, parts: tuple[str, ...], *, exclude_stores=False) -> int:
+    """Walk validated components without links, optionally stopping at nested stores."""
+    if os.open not in os.supports_dir_fd:
+        raise LabError("Safe record-file access requires Linux/WSL")
+    directory = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+            if exclude_stores:
+                try:
+                    os.stat("research.sqlite3", dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise LabError("Nested research stores have separate evidence namespaces")
+        return directory
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+def _open_regular(base: Path, relative: str, *, exclude_stores=False) -> int:
+    """Open a record through no-follow directory descriptors, including the leaf."""
+    relative_path(relative, "Record path")
+    parts = PurePosixPath(relative).parts
+    directory = _open_directory(base, parts[:-1], exclude_stores=exclude_stores)
+    try:
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise LabError("Record is not a regular file")
+        return fd
+    finally:
+        os.close(directory)
 
 
 def _regular(meta):
@@ -452,6 +490,32 @@ class Store:
 
     def attempt_dir(self, attempt_id):
         return self.root / "runs" / identifier(attempt_id, "run")
+
+    def read_artifact(self, attempt_id, relative, *, offset_bytes=0, max_bytes=32768):
+        """Read bounded, hash-verified recorded evidence, never arbitrary host files."""
+        if type(offset_bytes) is not int or offset_bytes < 0 or type(max_bytes) is not int or not 1 <= max_bytes <= 65536:
+            raise LabError("Artifact reads require a nonnegative byte offset and at most 65536 bytes")
+        attempt = self.get_attempt(attempt_id)
+        if attempt["state"] not in TERMINAL_STATES:
+            raise LabError("Artifacts are readable only after execution is terminal")
+        relative = relative_path(relative, "Artifact path")
+        artifact = next((item for item in (attempt.get("result") or {}).get("artifacts", []) if item["path"] == relative), None)
+        if artifact is None:
+            raise LabError("Artifact is not in the execution's recorded inventory")
+        with os.fdopen(_open_regular(self.root, f"runs/{attempt_id}/output/{relative}"), "rb") as stream:
+            size = os.fstat(stream.fileno()).st_size
+            if size != artifact["bytes"] or offset_bytes > size:
+                raise LabError("Artifact size changed or requested offset is outside the file")
+            digest = hashlib.sha256()
+            while chunk := stream.read(262144):
+                digest.update(chunk)
+            if digest.hexdigest() != artifact["sha256"]:
+                raise LabError("Artifact no longer matches its recorded hash")
+            stream.seek(offset_bytes)
+            content = stream.read(max_bytes)
+        return {"attempt_id": attempt_id, "path": relative, "sha256": artifact["sha256"], "bytes": size,
+                "offset_bytes": offset_bytes, "next_offset_bytes": offset_bytes + len(content),
+                "truncated": offset_bytes + len(content) < size, "text": content.decode("utf-8", errors="replace")}
 
     def register_input(self, path, name, *, expected_hashes=None):
         if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", name):

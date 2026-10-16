@@ -26,7 +26,7 @@ from .execution import configuration, run as run_experiment, stop as stop_attemp
 from .model_client import SPARK_BASE_URL, list_models
 from .models import LabError, TERMINAL_STATES, relative_path
 from .research import ResearchEngine
-from .store import Store
+from .store import Store, _open_directory, _open_regular
 
 MAX_BODY_BYTES = 1024 * 1024  # JSON bodies are capped at 1 MiB.
 LOG_TAIL_BYTES = 64 * 1024
@@ -90,27 +90,6 @@ class _HttpError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
-
-
-def _open_regular(base: Path, relative: str) -> int:
-    """Open a record through no-follow directory descriptors, including the leaf."""
-    relative_path(relative, "Record path")
-    if os.open not in os.supports_dir_fd:
-        raise LabError("Safe record-file access requires Linux/WSL")
-    directory = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        parts = PurePosixPath(relative).parts
-        for part in parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
-            raise LabError("Record is not a regular file")
-        return fd
-    finally:
-        os.close(directory)
 
 
 def _preview(base: Path, relative: str, *, tail=False, limit=65536) -> dict:

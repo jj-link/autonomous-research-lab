@@ -331,6 +331,16 @@ class ResearchEngine:
                 record["console"] = {"text": stream.read(8192).decode("utf-8", errors="replace"), "truncated": size > 8192}
         except FileNotFoundError:
             record["console"] = {"text": "", "truncated": False}
+        previews, remaining = [], 131072
+        for item in (record.get("result") or {}).get("artifacts", []):
+            if "/" in item["path"] or Path(item["path"]).suffix not in {".json", ".txt", ".md"} or item["bytes"] > 32768 or item["bytes"] > remaining:
+                continue
+            try:
+                previews.append(self.store.read_artifact(attempt_id, item["path"]))
+            except (LabError, OSError) as exc:
+                previews.append({"attempt_id": attempt_id, "path": item["path"], "error": str(exc)})
+            remaining -= item["bytes"]
+        record["artifact_previews"] = previews
         return record
 
     def _execution_record(self, implementation):
@@ -384,7 +394,7 @@ class ResearchEngine:
 
     def _context(self, program):
         brief = {k: v for k, v in program["brief"].items() if k not in {"model", "data_files"}}
-        return {"brief": brief, "approved_data": list(program["brief"]["data_files"]), "usage": program["usage"], "available_inputs": self._input_records(program),
+        return {"brief": brief, "approved_data": program["brief"]["data_files"], "usage": program["usage"], "available_inputs": self._input_records(program),
                 "environment": program["environment"], "questions": program["questions"], "sources": program["sources"][-5:],
                 "designs": program["designs"][-6:], "analyses": program["analyses"][-4:], "decisions": program["decisions"][-4:],
                 "record_index": [{"id": r["id"], "kind": key} for key in ("sources", "designs", "analyses", "decisions", "implementations", "calls") for r in program[key]]
@@ -492,6 +502,22 @@ class ResearchEngine:
             records = [self._attempt_record(i) if known[i].get("kind") == "attempt" else known[i] for i in ids]
             self._change(program_id, lambda p: (p["decisions"].append(decision), p.update(requested_records=records, pending_call_id=None)))
             return
+        if action == "read_artifacts":
+            requests = response.get("artifacts")
+            if not isinstance(requests, list) or not 1 <= len(requests) <= 3:
+                raise LabError("Artifact retrieval requires 1–3 requests")
+            known = self._known(program)
+            records = []
+            for request in requests:
+                require_keys(request, {"attempt_id", "path", "offset_bytes", "max_bytes"}, "artifact request")
+                attempt_id = text(request.get("attempt_id"), "artifact attempt ID", 64)
+                if known.get(attempt_id, {}).get("kind") != "attempt":
+                    raise LabError("Artifact retrieval must reference this program's executions")
+                records.append(self.store.read_artifact(attempt_id, request.get("path"),
+                                                       offset_bytes=request.get("offset_bytes", 0), max_bytes=request.get("max_bytes", 32768)))
+            decision["artifacts"] = requests
+            self._change(program_id, lambda p: (p["decisions"].append(decision), p.update(requested_records=records, pending_call_id=None)))
+            return
         if action == "questions":
             updates = response.get("updates")
             if not isinstance(updates, list) or not 1 <= len(updates) <= 10:
@@ -519,8 +545,10 @@ class ResearchEngine:
         if not isinstance(candidates, list) or not 1 <= len(candidates) <= maximum:
             raise LabError("Director returned an invalid candidate count")
         designs = []
-        prior_evidence = {a["id"] for a in program["analyses"]} | {i["attempt_id"] for i in program["implementations"] if i.get("attempt_id")} | {
-            i["id"] for i in program["implementations"] if i.get("batch_record")}
+        prior_evidence = ({a["id"] for a in program["analyses"]}
+                          | {i["id"] for i in program["implementations"] if i.get("batch_record")}
+                          | {item["attempt_id"] for implementation in program["implementations"]
+                             for item in [implementation, *implementation.get("jobs", [])] if item.get("attempt_id")})
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 raise LabError("Candidate must be an object")
@@ -676,7 +704,8 @@ class ResearchEngine:
                 raise LabError("Generated code exceeds 256 KiB")
             if not isinstance(manifest, dict) or manifest.get("source") != "code":
                 raise LabError("Builder manifest.source must be exactly code")
-            spec = ExperimentSpec.from_dict({"question": design["question"], "procedure": design["procedure"], **manifest}, folder)
+            spec = ExperimentSpec.from_dict({"question": design["question"], "procedure": design["procedure"],
+                                             "inputs": approved_inputs, "image": design.get("image"), **manifest}, folder)
             if spec.inputs != approved_inputs:
                 raise LabError("Builder inputs must exactly match the selected design's approved input bindings")
             if spec.image != design.get("image"):

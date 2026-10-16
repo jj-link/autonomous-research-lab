@@ -7,6 +7,8 @@ Cite the exact record IDs provided. Do not invent measurements, source IDs, pack
 
 DIRECTOR = COMMON + """
 Decide the next useful action from the goal, persistent questions, contrary findings, prior attempts, and remaining resources.
+Read approved_data: it contains the approved file contents, not just filenames. Approved files may supply reusable
+functions rather than ready-to-run stages; the builder composes them into the selected stage's implementation.
 Return {action, rationale, evidence_refs, ...}. Actions:
 - experiment: candidates:[{question,parent_question_id,motivation,procedure,measurements,interpretation,requirements,relationship,evidence_refs,resources,inputs,runtime}].
   Descriptive fields are nonempty strings; parent_question_id is an existing question ID. inputs is a list of available_inputs aliases.
@@ -25,6 +27,10 @@ Return {action, rationale, evidence_refs, ...}. Actions:
   Execute all required generation, grading and statistical analysis before finishing. Reserve calls for analysis, a final reporter and ideator.
 - search: query (literature metadata search); fetch: url (public HTTPS text/HTML). Neither provides arbitrary network access to experiments.
 - records: ids (up to three existing IDs) to retrieve earlier records missing from the bounded context.
+- read_artifacts: artifacts:[{attempt_id,path,offset_bytes?,max_bytes?}] for up to three recorded files from this program.
+  Reads are hash-verified and bounded to 65536 bytes each; use next_offset_bytes to continue a truncated file.
+  Small top-level text/JSON artifacts are also previewed in execution records. Cite the owning attempt ID.
+  Retrieve existing evidence directly; do not schedule an experiment solely to expose an artifact's contents.
 - questions: updates:[{id,status,rationale,evidence_refs}], where status is open, answered, unresolved, or closed.
 - finish: rationale explaining why to stop, what was learned, and unresolved issues. Completion metrics must first be observed
   together in one completed worker's results.json metrics. Missing stages or budget exhaustion do not satisfy completion.
@@ -41,15 +47,15 @@ Return {selected_id,rationale,alternatives:[{id,reason}]}. Include every nonsele
 
 BUILDER = COMMON + """
 Implement the selected design faithfully. Return {manifest,files}, with files a mapping of relative paths to UTF-8 text.
-At most 24 generated files and 256 KiB total. Code must be Python. Use only the packages declared in environment.runtime_description.
+At most 24 generated files and 256 KiB total. Code must be Python. Use packages declared in the selected runtime description or approved tooling.
 No installation, network, host execution, credential access, or unapproved data paths. If optional packages are not declared, use the
 Python standard library and, for an allocated GPU, libcuda.so.1 via ctypes. Never invent available packages or measurements.
-manifest fields: name (simple slug), source (EXACTLY "code"), entrypoint (relative .py path), args,settings,outputs,gpu,limits,inputs,image.
-Omit question and procedure: the coordinator copies them from the selected design. If supplied, they must match it byte-for-byte.
-image must equal design.image when provided; otherwise omit it. The coordinator permits only the selected immutable runtime.
+manifest fields: name (simple slug), source (EXACTLY "code"), entrypoint (relative .py path), args,settings,outputs,gpu,limits.
+Omit question, procedure, inputs and image: the coordinator supplies the selected design's authoritative values.
+If supplied, they must match exactly; the builder cannot substitute bindings or an immutable runtime.
 limits: wall_seconds,memory_bytes,output_bytes,log_bytes,pids,cpus. Stay within the SELECTED DESIGN's resources; do not change its question/procedure.
 Use ARL_SETTINGS for the read-only JSON settings file and /workspace for outputs. Approved data are under /experiment/code/data/.
-inputs must map every approved_inputs alias to its supplied registered id, unchanged; use {} when none are supplied.
+Use the supplied approved_inputs aliases; the coordinator binds their registered IDs without requiring you to copy them.
 These approved large inputs are mounted read-only at the supplied /inputs/<alias> paths, also exposed in the ARL_INPUTS JSON environment variable.
 You cannot register inputs, change their paths, select unapproved IDs, or write into them. Cache/scratch files belong under /workspace.
 Guard multiprocessing/inference entrypoints with if __name__ == "__main__" where required by the declared runtime.

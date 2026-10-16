@@ -247,14 +247,15 @@ Replace `PROGRAM_ID` with the returned ID. Omit `--wait` to launch a detached co
 ### What the coordinator enforces
 
 - Designs stay within the brief's resource permissions. Implementations cannot change the selected question or procedure, replace approved inline data, or change the selected runtime and input bindings.
-- Adaptive follow-ups cite a prior analysis or execution and explain the connection. Questions retain parent links, status changes, and supporting evidence.
+- Planning agents receive the approved inline file contents. Small collected text artifacts are previewed, and the director can retrieve recorded artifacts in hash-verified pages of up to 64 KiB, restricted to its own program's executions. Inspecting an existing file does not require another experiment.
+- Adaptive follow-ups cite a prior analysis or execution, including individual isolated batch attempts, and explain the connection. Questions retain parent links, status changes, and supporting evidence.
 - Failed executions, repairs, and planning calls consume their allowances. `max_experiments` counts execution attempts, including failures, not just successful studies.
 - Pause stops new scheduling and lets an active experiment finish. Stop requests termination of owned execution and keeps available outputs. Recovery reconciles recorded work instead of blindly repeating it.
 - Interrupted or invalid model requests remain recorded. Explicit resume permits a new, separately charged request; unavailable usage is marked unknown.
 - The reporter synthesizes recorded measurements into readable findings and tables; a separate ideator proposes evidence-linked follow-up designs covering refinement and new questions. These proposals are not authorized for execution. The completed report appears in the study catalog and dashboard.
 - Reaching a budget blocks the program; it is neither successful completion nor a scientific finding. Failed or incomplete evidence remains visible.
 
-Source retrieval supports public HTTPS text/HTML and Crossref metadata or abstracts, not arbitrary downloads or PDF reading. Excerpts and truncated responses are marked. Generated code uses the selected image's declared runtime packages; optional packages are not assumed when an image has no `org.autonomous-research-lab.runtime` label. The basic `Containerfile` provides Python's standard library and optional CUDA Driver API access. Arbitrary dependencies are not installed during an experiment.
+Source retrieval supports public HTTPS text/HTML and Crossref metadata or abstracts, not arbitrary downloads or PDF reading. Excerpts and truncated responses are marked. Generated code uses packages declared for the selected runtime or in approved tooling; undeclared dependencies are not assumed. The basic `Containerfile` provides Python's standard library and optional CUDA Driver API access. Arbitrary dependencies are not installed during an experiment.
 
 Accounting retains call counts, known provider token usage, execution attempts, measured wall time, and available CPU/memory observations. Unknown runtime is charged at its reservation. It does not infer complete GPU utilization, energy, monetary billing, or a hard total-dollar limit.
 
