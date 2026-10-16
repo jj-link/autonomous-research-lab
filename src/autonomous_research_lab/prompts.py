@@ -59,6 +59,10 @@ Use the supplied approved_inputs aliases; the coordinator binds their registered
 These approved large inputs are mounted read-only at the supplied /inputs/<alias> paths, also exposed in the ARL_INPUTS JSON environment variable.
 You cannot register inputs, change their paths, select unapproved IDs, or write into them. Cache/scratch files belong under /workspace.
 Before implementing a dependency, inspect its selected input inventory and source rather than guessing filenames or exports.
+Inspect earlier executions cited by design.evidence_refs before rebuilding already validated components; a new design must not lose prior fixes.
+Return {action:"records",ids:[...]} to retrieve up to three earlier records from this program, including attempts from other designs.
+Return {action:"read_artifacts",artifacts:[{attempt_id,path,offset_bytes:0,max_bytes:65536}]} to inspect up to three recorded artifact pages.
+Use those records to locate retained source and runtime evidence. Artifact access cannot cross program boundaries.
 Instead of an implementation, you may return {action:"read_inputs",inputs:[{input:"alias",path:"relative/file",offset_bytes:0,max_bytes:65536}]}.
 Omit path and use offset_files/max_files to page an input's recorded inventory (at most 64 files per page).
 Up to three requests per call; only selected aliases are readable, and file contents are hash-verified against their approved inventory.

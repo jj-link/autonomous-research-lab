@@ -490,6 +490,27 @@ class ResearchEngine:
             p["pending_call_id"] = None
         self._change(program_id, update)
 
+    def _read_records(self, program, ids):
+        ids = strings(ids, "record ids", 3)
+        known = self._known(program)
+        if set(ids) - known.keys():
+            raise LabError("Requested record IDs do not exist in this program")
+        return [self._attempt_record(i) if known[i].get("kind") == "attempt" else known[i] for i in ids]
+
+    def _read_artifacts(self, program, requests):
+        if not isinstance(requests, list) or not 1 <= len(requests) <= 3:
+            raise LabError("Artifact retrieval requires 1–3 requests")
+        known = self._known(program)
+        records = []
+        for request in requests:
+            require_keys(request, {"attempt_id", "path", "offset_bytes", "max_bytes"}, "artifact request")
+            attempt_id = text(request.get("attempt_id"), "artifact attempt ID", 64)
+            if known.get(attempt_id, {}).get("kind") != "attempt":
+                raise LabError("Artifact retrieval must reference this program's executions")
+            records.append(self.store.read_artifact(attempt_id, request.get("path"),
+                                                   offset_bytes=request.get("offset_bytes", 0), max_bytes=request.get("max_bytes", 32768)))
+        return records
+
     def _decision(self, program_id):
         program = self.get(program_id)
         response = self._call(program_id, "director", self._context(program))
@@ -506,26 +527,12 @@ class ResearchEngine:
             self._begin_report(program_id, rationale)
             return
         if action == "records":
-            ids = strings(response.get("ids"), "record ids", 3)
-            known = self._known(program)
-            if set(ids) - known.keys():
-                raise LabError("Requested record IDs do not exist")
-            records = [self._attempt_record(i) if known[i].get("kind") == "attempt" else known[i] for i in ids]
+            records = self._read_records(program, response.get("ids"))
             self._change(program_id, lambda p: (p["decisions"].append(decision), p.update(requested_records=records, pending_call_id=None)))
             return
         if action == "read_artifacts":
             requests = response.get("artifacts")
-            if not isinstance(requests, list) or not 1 <= len(requests) <= 3:
-                raise LabError("Artifact retrieval requires 1–3 requests")
-            known = self._known(program)
-            records = []
-            for request in requests:
-                require_keys(request, {"attempt_id", "path", "offset_bytes", "max_bytes"}, "artifact request")
-                attempt_id = text(request.get("attempt_id"), "artifact attempt ID", 64)
-                if known.get(attempt_id, {}).get("kind") != "attempt":
-                    raise LabError("Artifact retrieval must reference this program's executions")
-                records.append(self.store.read_artifact(attempt_id, request.get("path"),
-                                                       offset_bytes=request.get("offset_bytes", 0), max_bytes=request.get("max_bytes", 32768)))
+            records = self._read_artifacts(program, requests)
             decision["artifacts"] = requests
             self._change(program_id, lambda p: (p["decisions"].append(decision), p.update(requested_records=records, pending_call_id=None)))
             return
@@ -736,8 +743,14 @@ class ResearchEngine:
                                                      "permissions": {"max_parallel_workers": program["brief"].get("max_parallel_workers", 1),
                                                                      "resources": program["brief"]["resources"],
                                                                      "remaining_attempts": program["brief"]["max_experiments"] - program["usage"]["attempts"]}})
-        if response.get("action") == "read_inputs":
-            records = self._read_builder_inputs(approved_inputs, response.get("inputs"))
+        action = response.get("action")
+        if action in ("read_inputs", "records", "read_artifacts"):
+            if action == "read_inputs":
+                records = self._read_builder_inputs(approved_inputs, response.get("inputs"))
+            elif action == "records":
+                records = self._read_records(program, response.get("ids"))
+            else:
+                records = self._read_artifacts(program, response.get("artifacts"))
             self._patch(program_id, requested_records=records, pending_call_id=None)
             return
         call_id = self.get(program_id)["pending_call_id"]

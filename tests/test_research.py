@@ -28,7 +28,7 @@ class ResearchTests(unittest.TestCase):
         def seed(p):
             p.update(state="running", phase="decide", pending_call_id=call_id)
             p["calls"].append({"id": call_id, "role": role, "status": "pending", "usage": None})
-            p["usage"]["model_calls"] = 1
+            p["usage"]["model_calls"] += 1
         self.engine._change(self.id, seed)
         if response is not None:
             atomic_json(self.engine.folder(self.id) / "calls" / (call_id + ".json"), {"status": "completed", "response": {
@@ -213,6 +213,32 @@ class ResearchTests(unittest.TestCase):
         for relative in ("unlisted.json", "../outside-input.json"):
             with self.subTest(relative=relative), self.assertRaises(LabError):
                 self.engine.store.read_input_file(input_id, relative)
+
+    def test_builder_can_retrieve_prior_design_evidence_without_another_worker(self):
+        implementation, attempt = self.recorded_attempt()
+        design = {"id": new_id("design"), "question": "Preserve the earlier result", "procedure": "Inspect its evidence",
+                  "resources": self.program["brief"]["resources"], "inputs": {}, "evidence_refs": [attempt["id"]]}
+        self.pending({"action": "records", "ids": [attempt["id"]]}, role="builder")
+        self.engine._change(self.id, lambda p: p.update(phase="build", designs=[design], selected_design_id=design["id"]))
+        self.engine._build(self.id)
+        retrieved = self.engine.get(self.id)["requested_records"][0]
+        self.assertEqual(retrieved["id"], attempt["id"])
+        self.assertEqual(retrieved["state"], "completed")
+        self.pending({"action": "read_artifacts", "artifacts": [{"attempt_id": attempt["id"], "path": "results.json"}]},
+                     role="builder")
+        self.engine._patch(self.id, phase="build")
+        self.engine._build(self.id)
+        program = self.engine.get(self.id)
+        self.assertEqual(json.loads(program["requested_records"][0]["text"]), {"metrics": {"observed": 7}})
+        self.assertEqual(program["implementations"], [implementation])
+        self.assertEqual(program["usage"]["model_calls"], 2)
+        self.assertEqual(program["usage"]["implementation_attempts"], 0)
+        self.assertEqual(program["usage"]["attempts"], 0)
+        self.assertEqual([item["id"] for item in self.engine.store.list_experiments()], [implementation["experiment_id"]])
+        other = self.engine.create({"goal": "Unrelated evidence namespace",
+                                    "model": {"base_url": "https://api.example.com/v1", "model": "protocol-fixture"}})
+        with self.assertRaises(LabError):
+            self.engine._read_records(other, [attempt["id"]])
 
     def recorded_attempt(self, *, inputs=None, metrics=None, outputs=None, scratch="not a declared handoff"):
         code = self.folder / uuid.uuid4().hex
