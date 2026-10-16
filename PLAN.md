@@ -20,12 +20,12 @@ This document describes planned behavior, not implemented functionality or demon
 ### Ordered work and acceptance gates
 
 1. **Trace the real workflow before launching GPU work.**
-   - [ ] Identify the normal study-submission entrypoint and trace coordinator transitions through design, implementation, execution, grading, analysis, reporting, and follow-up design.
-   - [ ] Verify how the existing workspace, provider, approved inputs, and allocated GPU are bound to a research program.
+   - [x] Identify the normal study-submission entrypoint and trace coordinator transitions through design, implementation, execution, grading, analysis, reporting, and follow-up design.
+   - [x] Verify how the existing workspace, provider, approved inputs, and allocated GPU are bound to a research program.
    - **Gate:** the submission must create a coordinator-owned program whose agent calls and experiments are linked in the lab's records. A standalone worker attempt or script process is insufficient.
 
 2. **Repair product blockers without substituting for research agents.**
-   - [ ] Fix missing or broken coordinator/tool/reporting integration required by this study, following the existing architecture.
+   - [x] Fix missing or broken coordinator/tool/reporting integration required by this study, following the existing architecture.
    - [ ] Verify the affected behavior and commit and push coherent fixes before the full run.
    - **Gate:** each required stage is reachable through the coordinator. If a stage fails, repair that path rather than completing the stage manually outside the lab.
 

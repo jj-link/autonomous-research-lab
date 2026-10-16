@@ -185,7 +185,8 @@ def prepare(store: Store, attempt: dict, spec: ExperimentSpec) -> dict:
     if not needed <= controllers:
         raise LabError(f"Requested resource limits cannot be enforced: missing delegated cgroup controllers {sorted(needed - controllers)}. No host settings were changed.")
     config = configuration(store)
-    image = json.loads(podman("image", "inspect", config["image"]))[0]
+    image_reference = spec.image or config["image"]
+    image = json.loads(podman("image", "inspect", image_reference))[0]
     inputs = store.resolve_inputs(spec.inputs)
     if inputs:
         sources = [store.input_source(value["id"]) for value in inputs.values()]
@@ -225,7 +226,7 @@ def prepare(store: Store, attempt: dict, spec: ExperimentSpec) -> dict:
             devices = set(re.findall(r"nvidia\.com/gpu=[^\s]+", cdi.stdout + "\n" + cdi.stderr))
             if gpu_device not in devices:
                 raise LabError(f"Allocated CDI device {gpu_device} is not available; no other GPU will be substituted")
-    return {"backend": "podman-rootless", "image_reference": config["image"], "image_id": image["Id"],
+    return {"backend": "podman-rootless", "image_reference": image_reference, "image_id": image["Id"],
             "image_digests": image.get("RepoDigests", []), "gpu_uuid": attempt["gpu_uuid"],
             "gpu_device": gpu_device, "gpu_isolation": isolation, "limits": spec.limits.to_dict(),
             "inputs": inputs,
@@ -396,7 +397,7 @@ def finish(store: Store, attempt: dict, spec: ExperimentSpec, container: dict | 
     if output_bytes is not None and output_bytes > spec.limits.output_bytes:
         state, error = "limit_exceeded", "Experiment output exceeded its monitored storage allocation"
     paths = {item["path"] for item in artifacts}
-    missing = set(spec.outputs) - paths
+    missing = spec.missing_outputs(paths)
     if state == "completed" and missing:
         state, error = "failed", f"Missing required outputs: {', '.join(sorted(missing))}"
     observations = None

@@ -17,7 +17,7 @@ from analysis import SEEDS, analyze, render_report
 from stage_tasks import DATA, file_hash, task_filename
 from worker.grade import lcb_test_count, lcb_wall_seconds
 from worker.serving import ENGINE_OPTIONS
-from model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
+from autonomous_research_lab.model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]

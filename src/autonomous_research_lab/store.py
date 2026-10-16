@@ -35,6 +35,89 @@ def identifier(value, prefix):
     return value
 
 
+def _catalog_slug(value, label):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", value):
+        raise LabError(f"{label} must be a lowercase alphanumeric slug separated by hyphens or underscores")
+
+
+def _catalog_text(value, label):
+    if not isinstance(value, str) or not value.strip():
+        raise LabError(f"{label} must be a nonempty string")
+
+
+def _validate_catalog(catalog):
+    if not isinstance(catalog, dict) or set(catalog) != {"studies", "experiment_groups"}:
+        raise LabError("Catalog must contain exactly studies and experiment_groups")
+    fields = {
+        "studies": {"id", "title", "question", "parent_study_id", "rationale"},
+        "experiment_groups": {"id", "study_id", "purpose", "label", "model", "seeds", "experiment_ids"},
+    }
+    memberships = set()
+    for kind, required in fields.items():
+        records = catalog[kind]
+        if not isinstance(records, list):
+            raise LabError(f"Catalog {kind} must be an array")
+        seen = set()
+        for record in records:
+            if not isinstance(record, dict) or set(record) != required:
+                raise LabError(f"Each {kind} entry must contain exactly {', '.join(sorted(required))}")
+            _catalog_slug(record["id"], f"{kind} id")
+            if record["id"] in seen:
+                raise LabError(f"Duplicate {kind} id: {record['id']}")
+            seen.add(record["id"])
+            if kind == "studies":
+                _catalog_text(record["title"], "Study title")
+                _catalog_text(record["question"], "Study question")
+                if record["parent_study_id"] is None:
+                    if record["rationale"] is not None:
+                        raise LabError("Root studies must have a null rationale")
+                else:
+                    _catalog_slug(record["parent_study_id"], "Study parent_study_id")
+                    _catalog_text(record["rationale"], "Follow-up study rationale")
+                continue
+            purpose = record["purpose"]
+            if not isinstance(purpose, str) or purpose not in {"comparison", "compatibility", "setup", "calibration", "diagnostic"}:
+                raise LabError("Group purpose must be comparison, compatibility, setup, calibration, or diagnostic")
+            if record["study_id"] is None:
+                if purpose != "diagnostic":
+                    raise LabError("Only diagnostic groups may have a null study_id")
+            else:
+                _catalog_slug(record["study_id"], "Group study_id")
+            _catalog_text(record["label"], "Group label")
+            if record["model"] is not None:
+                _catalog_text(record["model"], "Group model")
+            seeds = record["seeds"]
+            if not isinstance(seeds, list) or any(type(seed) is not int for seed in seeds):
+                raise LabError("Group seeds must be an array of integers")
+            if len(seeds) != len(set(seeds)):
+                raise LabError("Group seeds must not contain duplicates")
+            if not isinstance(record["experiment_ids"], list):
+                raise LabError("Group experiment_ids must be an array")
+            for experiment_id in record["experiment_ids"]:
+                identifier(experiment_id, "exp")
+                if experiment_id in memberships:
+                    raise LabError(f"Experiment is assigned more than once in this import: {experiment_id}")
+                memberships.add(experiment_id)
+
+
+def _validate_study_lineage(parents):
+    for study_id, parent_id in parents.items():
+        if parent_id is not None and parent_id not in parents:
+            raise LabError(f"Unknown parent study for {study_id}: {parent_id}")
+        if parent_id == study_id:
+            raise LabError(f"Study cannot be its own parent: {study_id}")
+    visited = set()
+    for study_id in parents:
+        path = set()
+        current = study_id
+        while current is not None and current not in visited:
+            if current in path:
+                raise LabError(f"Study lineage must not contain cycles: {current}")
+            path.add(current)
+            current = parents[current]
+        visited.update(path)
+
+
 def _regular(meta):
     return stat.S_ISREG(meta.st_mode) and not (getattr(meta, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
@@ -151,6 +234,37 @@ class Store:
                     attempt_id TEXT NOT NULL REFERENCES attempts(id),
                     timestamp TEXT NOT NULL, kind TEXT NOT NULL, details TEXT NOT NULL
                 );
+                -- Additive metadata only: version 1 workers keep using the original record tables.
+                CREATE TABLE IF NOT EXISTS studies (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, question TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS study_lineage (
+                    study_id TEXT PRIMARY KEY NOT NULL REFERENCES studies(id),
+                    parent_study_id TEXT NOT NULL REFERENCES studies(id),
+                    rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+                    CHECK (study_id != parent_study_id)
+                );
+                CREATE TABLE IF NOT EXISTS study_coordinators (
+                    program_id TEXT PRIMARY KEY NOT NULL,
+                    study_id TEXT NOT NULL UNIQUE REFERENCES studies(id)
+                );
+                CREATE TABLE IF NOT EXISTS experiment_groups (
+                    id TEXT PRIMARY KEY, study_id TEXT REFERENCES studies(id),
+                    purpose TEXT NOT NULL CHECK (purpose IN ('comparison','compatibility','setup','calibration','diagnostic')),
+                    label TEXT NOT NULL, model TEXT, seeds TEXT NOT NULL,
+                    CHECK (study_id IS NOT NULL OR purpose = 'diagnostic')
+                );
+                CREATE TABLE IF NOT EXISTS experiment_group_memberships (
+                    experiment_id TEXT PRIMARY KEY REFERENCES experiments(id),
+                    group_id TEXT NOT NULL REFERENCES experiment_groups(id)
+                );
+                CREATE TABLE IF NOT EXISTS study_coordinator_groups (
+                    program_id TEXT NOT NULL REFERENCES study_coordinators(program_id),
+                    design_id TEXT NOT NULL,
+                    group_id TEXT NOT NULL UNIQUE REFERENCES experiment_groups(id),
+                    PRIMARY KEY (program_id, design_id)
+                );
+                CREATE INDEX IF NOT EXISTS membership_group ON experiment_group_memberships(group_id);
                 PRAGMA user_version=1;
             """)
 
@@ -195,6 +309,143 @@ class Store:
     def _event(connection, attempt_id, kind, details):
         connection.execute("INSERT INTO events(attempt_id,timestamp,kind,details) VALUES (?,?,?,?)",
                            (attempt_id, utc_now(), kind, canonical_json(details)))
+
+    @staticmethod
+    def _catalog(connection):
+        studies = [dict(row) for row in connection.execute("""
+            SELECT studies.id, studies.title, studies.question, lineage.parent_study_id, lineage.rationale
+            FROM studies LEFT JOIN study_lineage AS lineage ON lineage.study_id = studies.id
+            ORDER BY studies.id
+        """)]
+        groups = {}
+        for row in connection.execute("SELECT * FROM experiment_groups ORDER BY id"):
+            group = dict(row)
+            group["seeds"] = json.loads(group["seeds"])
+            group["experiment_ids"] = []
+            groups[group["id"]] = group
+        for row in connection.execute("""
+            SELECT membership.group_id, experiment.id
+            FROM experiment_group_memberships AS membership
+            JOIN experiments AS experiment ON experiment.id = membership.experiment_id
+            ORDER BY experiment.created_at, experiment.id
+        """):
+            groups[row["group_id"]]["experiment_ids"].append(row["id"])
+        return {"studies": studies, "experiment_groups": list(groups.values())}
+
+    def list_catalog(self):
+        with self._db() as connection:
+            connection.execute("BEGIN")
+            return self._catalog(connection)
+
+    def reconcile_programs(self, programs):
+        """Link saved coordinators and submitted designs without replacing authored metadata.
+
+        Coordinator persistence is separate: callers save it first, and subsequent overview
+        requests repair missing registration. This transaction only changes catalog metadata.
+        Existing memberships, including manual reclassification, always take precedence.
+        """
+        links = {}
+        with self._db(write=True) as connection:
+            for program in programs:
+                program_id = program["id"]
+                _catalog_text(program_id, "Program ID")
+                goal = program["brief"]["goal"]
+                _catalog_text(goal, "Study question")
+                row = connection.execute(
+                    "SELECT study_id FROM study_coordinators WHERE program_id=?", (program_id,)
+                ).fetchone()
+                if row is None:
+                    study_id = "study-" + uuid.uuid4().hex
+                    connection.execute("INSERT INTO studies(id,title,question) VALUES (?,?,?)",
+                                       (study_id, goal, goal))
+                    connection.execute("INSERT INTO study_coordinators(program_id,study_id) VALUES (?,?)",
+                                       (program_id, study_id))
+                else:
+                    study_id = row["study_id"]
+                links[program_id] = study_id
+                designs = {design["id"]: design for design in program["designs"]}
+                submitted = {}
+                submissions = ({**item, "design_id": implementation["design_id"]}
+                               for implementation in program["implementations"]
+                               for item in [implementation, *implementation.get("jobs", [])])
+                for implementation in submissions:
+                    experiment_id = implementation.get("experiment_id")
+                    if experiment_id is None:
+                        continue
+                    design_id = implementation["design_id"]
+                    if design_id not in designs:
+                        raise LabError(f"Unknown coordinator design: {design_id}")
+                    _catalog_text(designs[design_id]["question"], "Design question")
+                    if connection.execute("SELECT 1 FROM experiments WHERE id=?", (experiment_id,)).fetchone() is None:
+                        raise LabError(f"Unknown experiment: {experiment_id}")
+                    if connection.execute(
+                        "SELECT 1 FROM experiment_group_memberships WHERE experiment_id=?", (experiment_id,)
+                    ).fetchone() is None:
+                        submitted.setdefault(design_id, set()).add(experiment_id)
+                for design_id, experiment_ids in submitted.items():
+                    row = connection.execute(
+                        "SELECT group_id FROM study_coordinator_groups WHERE program_id=? AND design_id=?",
+                        (program_id, design_id),
+                    ).fetchone()
+                    if row is None:
+                        group_id = "group-" + uuid.uuid4().hex
+                        connection.execute("""
+                            INSERT INTO experiment_groups(id,study_id,purpose,label,model,seeds)
+                            VALUES (?,?,'comparison',?,NULL,'[]')
+                        """, (group_id, study_id, designs[design_id]["question"]))
+                        connection.execute("""
+                            INSERT INTO study_coordinator_groups(program_id,design_id,group_id) VALUES (?,?,?)
+                        """, (program_id, design_id, group_id))
+                    else:
+                        group_id = row["group_id"]
+                    connection.executemany(
+                        "INSERT INTO experiment_group_memberships(experiment_id,group_id) VALUES (?,?)",
+                        ((experiment_id, group_id) for experiment_id in experiment_ids),
+                    )
+        return links
+
+    def import_catalog(self, catalog):
+        """Upsert explicit metadata and memberships; omitted records retain their assignments."""
+        _validate_catalog(catalog)
+        with self._db(write=True) as connection:
+            parents = {row["id"]: row["parent_study_id"] for row in connection.execute("""
+                SELECT studies.id, lineage.parent_study_id
+                FROM studies LEFT JOIN study_lineage AS lineage ON lineage.study_id = studies.id
+            """)}
+            parents.update((study["id"], study["parent_study_id"]) for study in catalog["studies"])
+            _validate_study_lineage(parents)
+            for study in catalog["studies"]:
+                connection.execute("""
+                    INSERT INTO studies(id,title,question) VALUES (?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET title=excluded.title, question=excluded.question
+                """, (study["id"], study["title"], study["question"]))
+            for study in catalog["studies"]:
+                if study["parent_study_id"] is None:
+                    connection.execute("DELETE FROM study_lineage WHERE study_id=?", (study["id"],))
+                else:
+                    connection.execute("""
+                        INSERT INTO study_lineage(study_id,parent_study_id,rationale) VALUES (?,?,?)
+                        ON CONFLICT(study_id) DO UPDATE SET
+                            parent_study_id=excluded.parent_study_id, rationale=excluded.rationale
+                    """, (study["id"], study["parent_study_id"], study["rationale"]))
+            for group in catalog["experiment_groups"]:
+                study_id = group["study_id"]
+                if study_id is not None and connection.execute("SELECT 1 FROM studies WHERE id=?", (study_id,)).fetchone() is None:
+                    raise LabError(f"Unknown study: {study_id}")
+                connection.execute("""
+                    INSERT INTO experiment_groups(id,study_id,purpose,label,model,seeds) VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET study_id=excluded.study_id, purpose=excluded.purpose,
+                        label=excluded.label, model=excluded.model, seeds=excluded.seeds
+                """, (group["id"], study_id, group["purpose"], group["label"], group["model"],
+                      canonical_json(sorted(group["seeds"]))))
+                for experiment_id in group["experiment_ids"]:
+                    if connection.execute("SELECT 1 FROM experiments WHERE id=?", (experiment_id,)).fetchone() is None:
+                        raise LabError(f"Unknown experiment: {experiment_id}")
+                    connection.execute("""
+                        INSERT INTO experiment_group_memberships(experiment_id,group_id) VALUES (?,?)
+                        ON CONFLICT(experiment_id) DO UPDATE SET group_id=excluded.group_id
+                    """, (experiment_id, group["id"]))
+            return self._catalog(connection)
 
     def bundle_dir(self, experiment_id):
         return self.root / "experiments" / identifier(experiment_id, "exp") / "bundle"

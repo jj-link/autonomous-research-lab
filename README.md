@@ -221,7 +221,15 @@ Save a brief such as this as `brief.json`, replacing `CODEX_MODEL_ID` with an ID
 
 Optional `sources` is a list of public HTTPS URLs. Optional `data_files` maps relative filenames to approved UTF-8 text, not host paths; at most 16 files and 256 KiB total. These inputs become read-only files under `/experiment/code/data/`.
 
-Optional `inputs` maps aliases to host-approved input IDs, as described above; it is separate from inline `data_files`. A checkpoint is available at `/inputs/<alias>`, not at its original host path.
+Optional `inputs` maps aliases to host-approved input IDs, as described above; it is separate from inline `data_files`. Each design selects the inputs it needs. A checkpoint is available at `/inputs/<alias>`, not at its original host path. Declared outputs of completed workers become registered, read-only inputs for subsequent stages; undeclared scratch files are excluded. An output declaration ending in `/` includes that directory subtree.
+
+Optional `private_inputs` lists input aliases that must never be mounted in GPU workers. This restriction follows derived artifacts. Optional `runtimes` maps names to approved immutable local image IDs; each design chooses one, and the builder cannot substitute another image.
+
+Optional `checkpoint_cache` contains an absolute native-filesystem `root` and `checkpoints`, mapping approved checkpoint aliases to `{repo_id,revision}`. The coordinator stages one selected checkpoint at a time, verifies its pinned inventory, and releases only ownership-checked cache files after execution is terminal. Canonical model files remain untouched.
+
+Independent CPU jobs can use coordinator-owned isolated batches. The builder returns `batch:{input,path,parallelism}` identifying a JSON index in a selected input. Its `jobs` contain unique `key` values, `settings`, `wall_seconds`, and per-job `inputs`. Each mount projects approved files using `{input,files:{destination:source}}`; `$batch` refers to the index's own input. Every job gets a separate normal experiment and container. `max_parallel_workers` defaults to one, allows up to eight, and remains subject to aggregate memory/PID permissions and attempt/runtime budgets. Completed batches publish `batch.json` with individual attempts, observations, and artifacts for subsequent analysis.
+
+Optional `completion_metrics` maps metric names to required numeric values. All must be observed together in one completed worker's `results.json` before the program can finish; prose claiming completion is insufficient.
 
 ```sh
 .venv-linux/bin/arl program create brief.json
@@ -238,12 +246,13 @@ Replace `PROGRAM_ID` with the returned ID. Omit `--wait` to launch a detached co
 
 ### What the coordinator enforces
 
-- Designs stay within the brief's resource permissions. Implementations cannot change the selected question or procedure, replace approved inline data, or change approved large-input bindings.
+- Designs stay within the brief's resource permissions. Implementations cannot change the selected question or procedure, replace approved inline data, or change the selected runtime and input bindings.
 - Adaptive follow-ups cite a prior analysis or execution and explain the connection. Questions retain parent links, status changes, and supporting evidence.
 - Failed executions, repairs, and planning calls consume their allowances. `max_experiments` counts execution attempts, including failures, not just successful studies.
 - Pause stops new scheduling and lets an active experiment finish. Stop requests termination of owned execution and keeps available outputs. Recovery reconciles recorded work instead of blindly repeating it.
 - Interrupted or invalid model requests remain recorded. Explicit resume permits a new, separately charged request; unavailable usage is marked unknown.
-- Reports separate recorded measurements from model-authored interpretations. Reaching a budget is a stopping reason, not a scientific finding.
+- The reporter synthesizes recorded measurements into readable findings and tables; a separate ideator proposes evidence-linked follow-up designs covering refinement and new questions. These proposals are not authorized for execution. The completed report appears in the study catalog and dashboard.
+- Reaching a budget blocks the program; it is neither successful completion nor a scientific finding. Failed or incomplete evidence remains visible.
 
 Source retrieval supports public HTTPS text/HTML and Crossref metadata or abstracts, not arbitrary downloads or PDF reading. Excerpts and truncated responses are marked. Generated code uses the selected image's declared runtime packages; optional packages are not assumed when an image has no `org.autonomous-research-lab.runtime` label. The basic `Containerfile` provides Python's standard library and optional CUDA Driver API access. Arbitrary dependencies are not installed during an experiment.
 

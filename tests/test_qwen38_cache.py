@@ -1,5 +1,4 @@
 """Cache integrity and ownership regressions; no models or temporary directories."""
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,10 +11,7 @@ import uuid
 from autonomous_research_lab.models import LabError, read_json
 from autonomous_research_lab.store import Store
 
-MODULE = Path(__file__).resolve().parents[1] / "research/qwen38-nvfp4/model_cache.py"
-SPEC = importlib.util.spec_from_file_location("qwen38_model_cache", MODULE)
-cache = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(cache)
+from autonomous_research_lab import model_cache as cache
 
 
 class CheckpointCacheTests(unittest.TestCase):

@@ -11,7 +11,7 @@ from autonomous_research_lab.execution import atomic_json, configuration
 from autonomous_research_lab.models import ExperimentSpec, LabError, Limits, read_json
 from autonomous_research_lab.store import Store
 from analysis import SEEDS, analyze, render_report, select_throughput, sustained_throughput
-from model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
+from autonomous_research_lab.model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
 from stage_tasks import DATA, file_hash, rows, task_filename
 from study import artifact_file, execute_once, require_completed, retire_completed_grader
 from task_data import prepare_coding_followup

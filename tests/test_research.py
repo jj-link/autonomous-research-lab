@@ -1,4 +1,5 @@
 """Recovery/control invariants; cached protocol records are fixtures, not model calls."""
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -7,7 +8,7 @@ from unittest.mock import patch
 import uuid
 
 from autonomous_research_lab.execution import atomic_json
-from autonomous_research_lab.models import LabError
+from autonomous_research_lab.models import ExperimentSpec, LabError
 from autonomous_research_lab.research import ResearchEngine, new_id, resource_spec, validate_brief, within
 from autonomous_research_lab.store import Store
 
@@ -52,6 +53,22 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual([call["id"] for call in result["calls"]], [call_id])
         self.assertEqual(result["usage"]["completion_tokens_known"], 7)
         self.assertIsNone(result["pending_call_id"])
+
+    def test_registered_input_citations_require_program_approval(self):
+        source = self.folder / "citation-source"
+        source.mkdir()
+        (source / "data.json").write_text('{"value":7}')
+        input_id = self.engine.store.register_input(source, "citation-source")["id"]
+        self.engine._change(self.id, lambda p: p["brief"].update(inputs={"approved": input_id}))
+        self.pending({"action": "finish", "rationale": "The approved input cannot answer this question", "evidence_refs": [input_id]})
+        self.assertEqual(self.engine.work(self.id)["state"], "completed")
+        other = self.engine.create({"goal": "Another program without that input",
+                                    "model": {"base_url": "https://api.example.com/v1", "model": "protocol-fixture"}})
+        self.id = other["id"]
+        self.pending({"action": "finish", "rationale": "Citing another program's input", "evidence_refs": [input_id]})
+        rejected = self.engine.work(self.id)
+        self.assertEqual(rejected["state"], "blocked")
+        self.assertEqual(rejected["calls"][-1]["status"], "invalid")
 
     def test_pause_wins_over_late_request_completion(self):
         self.pending({"action": "finish", "rationale": "No further work", "evidence_refs": []})
@@ -136,6 +153,87 @@ class ResearchTests(unittest.TestCase):
                 self.assertEqual(implementation["status"], "invalid")
                 self.assertIsNone(implementation["experiment_id"])
                 self.assertEqual(self.engine.store.list_experiments(), [])
+
+    def recorded_attempt(self, *, inputs=None, metrics=None):
+        code = self.folder / uuid.uuid4().hex
+        code.mkdir()
+        (code / "main.py").write_text("pass\n")
+        spec = ExperimentSpec.from_dict({"name": "artifact-boundary", "source": str(code), "entrypoint": "main.py",
+                                         "inputs": inputs or {}, "outputs": ["results.json"]}, code)
+        experiment = self.engine.store.submit(spec)
+        attempt = self.engine.store.create_attempt(experiment["id"])
+        self.engine.store.update_attempt(attempt["id"], state="starting")
+        self.engine.store.update_attempt(attempt["id"], state="running")
+        output = self.engine.store.attempt_dir(attempt["id"]) / "output"
+        output.mkdir(exist_ok=True)
+        contents = json.dumps({"metrics": metrics or {"observed": 7}})
+        (output / "results.json").write_text(contents)
+        (output / "scratch.txt").write_text("not a declared handoff")
+        artifacts = [{"path": name, "sha256": hashlib.sha256((output / name).read_bytes()).hexdigest(),
+                      "bytes": (output / name).stat().st_size} for name in ("results.json", "scratch.txt")]
+        attempt = self.engine.store.update_attempt(attempt["id"], state="completed", result={
+            "artifacts": artifacts, "observations": json.loads(contents)})
+        implementation = {"id": new_id("implementation"), "design_id": new_id("design"), "status": "collected",
+                          "attempt_id": attempt["id"], "experiment_id": experiment["id"]}
+        self.engine._change(self.id, lambda p: p["implementations"].append(implementation))
+        return implementation, attempt
+
+    def test_handoff_excludes_scratch_and_preserves_private_lineage(self):
+        directory = self.folder / "private"
+        directory.mkdir()
+        (directory / "tests.json").write_text('{"secret":7}')
+        input_id = self.engine.store.register_input(directory, "private")["id"]
+        self.engine._change(self.id, lambda p: p["brief"].update(inputs={"private": input_id}, private_inputs=["private"]))
+        implementation, attempt = self.recorded_attempt(inputs={"private": input_id})
+        self.engine._publish_outputs(self.id, implementation, attempt)
+        saved = self.engine.get(self.id)["implementations"][-1]
+        published = saved["published_input"]
+        record = self.engine.store.verify_input(published["id"])
+        self.assertEqual([item["path"] for item in record["files"]], ["results.json"])
+        self.assertEqual(json.loads((self.engine.store.input_source(record["id"]) / "results.json").read_text())["metrics"], {"observed": 7})
+        bindings, private_ids = self.engine._available_inputs(self.engine.get(self.id))
+        self.assertEqual(bindings[published["alias"]], record["id"])
+        self.assertIn(record["id"], private_ids)
+        self.engine._publish_outputs(self.id, saved, attempt)
+        self.assertEqual(self.engine.get(self.id)["implementations"][-1]["published_input"], published)
+        candidate = {key: "Bounded design" for key in ("question", "motivation", "procedure", "measurements", "interpretation", "requirements", "relationship")}
+        candidate.update(parent_question_id=self.program["questions"][0]["id"], inputs=[published["alias"]],
+                         resources={"gpu": True}, evidence_refs=[attempt["id"]])
+        self.pending({"action": "experiment", "rationale": "Read derived private data", "evidence_refs": [attempt["id"]], "candidates": [candidate]})
+        result = self.engine.work(self.id)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["designs"], [])
+
+    def test_changed_artifact_cannot_be_registered_as_recorded_evidence(self):
+        implementation, attempt = self.recorded_attempt()
+        (self.engine.store.attempt_dir(attempt["id"]) / "output" / "results.json").write_text('{"metrics":{"observed":8}}')
+        with self.assertRaises(LabError):
+            self.engine._publish_outputs(self.id, implementation, attempt)
+        self.assertNotIn("published_input", self.engine.get(self.id)["implementations"][-1])
+        self.assertEqual(self.engine.store.list_inputs(), [])
+
+    def test_completion_requires_all_metrics_in_one_completed_execution(self):
+        self.engine._change(self.id, lambda p: p["brief"].update(completion_metrics={"responses": 12, "graded": 12}))
+        self.recorded_attempt(metrics={"responses": 12, "graded": 0})
+        self.recorded_attempt(metrics={"responses": 0, "graded": 12})
+        with self.assertRaises(LabError):
+            self.engine._check_completion(self.engine.get(self.id))
+        self.recorded_attempt(metrics={"responses": 12, "graded": 12})
+        self.engine._check_completion(self.engine.get(self.id))
+
+    def test_budget_exhaustion_is_blocked_not_completed(self):
+        self.pending()
+        self.engine._change(self.id, lambda p: (p.update(pending_call_id=None), p["brief"].update(max_model_calls=1)))
+        result = self.engine.work(self.id)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["implementations"], [])
+
+    def test_finish_cannot_bypass_missing_completion_evidence(self):
+        self.engine._change(self.id, lambda p: p["brief"].update(completion_metrics={"graded": 12}))
+        self.pending({"action": "finish", "rationale": "Claiming completion without execution", "evidence_refs": []})
+        result = self.engine.work(self.id)
+        self.assertEqual(result["state"], "blocked")
+        self.assertNotIn("report", result)
 
 
 if __name__ == "__main__":

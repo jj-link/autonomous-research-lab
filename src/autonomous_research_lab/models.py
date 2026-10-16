@@ -120,10 +120,11 @@ class ExperimentSpec:
     gpu: bool = False
     limits: Limits = field(default_factory=Limits)
     inputs: dict[str, str] = field(default_factory=dict)
+    image: str | None = None
 
     @classmethod
     def from_dict(cls, value: Any, base: Path) -> "ExperimentSpec":
-        require_keys(value, {"schema_version", "name", "source", "entrypoint", "question", "procedure", "args", "settings", "outputs", "gpu", "limits", "inputs"}, "experiment")
+        require_keys(value, {"schema_version", "name", "source", "entrypoint", "question", "procedure", "args", "settings", "outputs", "gpu", "limits", "inputs", "image"}, "experiment")
         if value.get("schema_version", 1) != 1:
             raise LabError("Unsupported experiment schema_version; expected 1")
         name = value.get("name")
@@ -143,8 +144,9 @@ class ExperimentSpec:
         canonical_json(settings)
         outputs = value.get("outputs", ["results.json"])
         if not isinstance(outputs, list):
-            raise LabError("outputs must be an array of relative file paths")
-        outputs = tuple(relative_path(path, "output") for path in outputs)
+            raise LabError("outputs must be an array of relative file paths or directory prefixes ending in /")
+        outputs = tuple(relative_path(path[:-1], "output directory") + "/" if isinstance(path, str) and path.endswith("/")
+                        else relative_path(path, "output") for path in outputs)
         if len(set(outputs)) != len(outputs):
             raise LabError("outputs must not contain duplicates")
         gpu = value.get("gpu", False)
@@ -153,13 +155,23 @@ class ExperimentSpec:
         for key in ("question", "procedure"):
             if not isinstance(value.get(key, ""), str):
                 raise LabError(f"{key} must be a string")
-        return cls(name, source_path, entrypoint, value.get("question", ""), value.get("procedure", ""), tuple(args), settings, outputs, gpu, Limits.from_dict(value.get("limits", {})), input_bindings(value.get("inputs", {})))
+        image = value.get("image")
+        if image is not None and (not isinstance(image, str) or not re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", image)):
+            raise LabError("image must be an immutable local SHA-256 image ID")
+        return cls(name, source_path, entrypoint, value.get("question", ""), value.get("procedure", ""), tuple(args), settings, outputs, gpu, Limits.from_dict(value.get("limits", {})), input_bindings(value.get("inputs", {})), image)
+
+    def includes_output(self, path: str) -> bool:
+        return any(path == wanted or (wanted.endswith("/") and path.startswith(wanted)) for wanted in self.outputs)
+
+    def missing_outputs(self, paths) -> set[str]:
+        return {wanted for wanted in self.outputs if not any(
+            path == wanted or (wanted.endswith("/") and path.startswith(wanted)) for path in paths)}
 
     def to_dict(self) -> dict:
         return {"schema_version": 1, "name": self.name, "source": str(self.source), "entrypoint": self.entrypoint,
                 "question": self.question, "procedure": self.procedure, "args": list(self.args),
                 "settings": self.settings, "outputs": list(self.outputs), "gpu": self.gpu, "limits": self.limits.to_dict(),
-                **({"inputs": self.inputs} if self.inputs else {})}
+                **({"inputs": self.inputs} if self.inputs else {}), **({"image": self.image} if self.image else {})}
 
 
 def load_manifest(path: Path) -> ExperimentSpec:
