@@ -323,6 +323,14 @@ class ResearchEngine:
 
     def _attempt_record(self, attempt_id):
         record = self.store.get_attempt(attempt_id)
+        result = record.get("result")
+        if result:
+            manifest = self.store.get_experiment(record["experiment_id"])["manifest"]
+            spec = ExperimentSpec.from_dict(manifest, self.store.root)
+            artifacts = result.get("artifacts", [])
+            result["artifacts"] = [item for item in artifacts if spec.includes_output(item["path"])]
+            result["artifact_index_scope"] = "declared_outputs"
+            result["omitted_undeclared_artifacts"] = len(artifacts) - len(result["artifacts"])
         path = self.store.attempt_dir(attempt_id) / "console.log"
         try:
             with path.open("rb") as stream:
@@ -333,13 +341,16 @@ class ResearchEngine:
             record["console"] = {"text": "", "truncated": False}
         previews, remaining = [], 131072
         for item in (record.get("result") or {}).get("artifacts", []):
-            if "/" in item["path"] or Path(item["path"]).suffix not in {".json", ".txt", ".md"} or item["bytes"] > 32768 or item["bytes"] > remaining:
+            if not remaining:
+                break
+            if "/" in item["path"] or Path(item["path"]).suffix not in {".json", ".txt", ".md"}:
                 continue
+            limit = min(65536, remaining)
             try:
-                previews.append(self.store.read_artifact(attempt_id, item["path"]))
+                previews.append(self.store.read_artifact(attempt_id, item["path"], max_bytes=limit))
             except (LabError, OSError) as exc:
                 previews.append({"attempt_id": attempt_id, "path": item["path"], "error": str(exc)})
-            remaining -= item["bytes"]
+            remaining -= min(item["bytes"], limit)
         record["artifact_previews"] = previews
         return record
 

@@ -154,12 +154,12 @@ class ResearchTests(unittest.TestCase):
                 self.assertIsNone(implementation["experiment_id"])
                 self.assertEqual(self.engine.store.list_experiments(), [])
 
-    def recorded_attempt(self, *, inputs=None, metrics=None):
+    def recorded_attempt(self, *, inputs=None, metrics=None, outputs=None, scratch="not a declared handoff"):
         code = self.folder / uuid.uuid4().hex
         code.mkdir()
         (code / "main.py").write_text("pass\n")
         spec = ExperimentSpec.from_dict({"name": "artifact-boundary", "source": str(code), "entrypoint": "main.py",
-                                         "inputs": inputs or {}, "outputs": ["results.json"]}, code)
+                                         "inputs": inputs or {}, "outputs": outputs or ["results.json"]}, code)
         experiment = self.engine.store.submit(spec)
         attempt = self.engine.store.create_attempt(experiment["id"])
         self.engine.store.update_attempt(attempt["id"], state="starting")
@@ -168,7 +168,7 @@ class ResearchTests(unittest.TestCase):
         output.mkdir(exist_ok=True)
         contents = json.dumps({"metrics": metrics or {"observed": 7}})
         (output / "results.json").write_text(contents)
-        (output / "scratch.txt").write_text("not a declared handoff")
+        (output / "scratch.txt").write_text(scratch)
         artifacts = [{"path": name, "sha256": hashlib.sha256((output / name).read_bytes()).hexdigest(),
                       "bytes": (output / name).stat().st_size} for name in ("results.json", "scratch.txt")]
         attempt = self.engine.store.update_attempt(attempt["id"], state="completed", result={
@@ -177,6 +177,27 @@ class ResearchTests(unittest.TestCase):
                           "attempt_id": attempt["id"], "experiment_id": experiment["id"]}
         self.engine._change(self.id, lambda p: p["implementations"].append(implementation))
         return implementation, attempt
+
+    def test_model_evidence_excludes_scratch_without_losing_recorded_artifacts(self):
+        _, attempt = self.recorded_attempt()
+        evidence = self.engine._attempt_record(attempt["id"])
+        self.assertEqual([item["path"] for item in evidence["result"]["artifacts"]], ["results.json"])
+        self.assertEqual(evidence["result"]["omitted_undeclared_artifacts"], 1)
+        self.assertEqual([item["path"] for item in evidence["artifact_previews"]], ["results.json"])
+        self.assertEqual(evidence["result"]["observations"], {"metrics": {"observed": 7}})
+        retained = self.engine.store.get_attempt(attempt["id"])
+        self.assertEqual(retained["result"], attempt["result"])
+        scratch = self.engine.store.read_artifact(attempt["id"], "scratch.txt")
+        self.assertEqual(scratch["text"], "not a declared handoff")
+
+    def test_large_declared_diagnostics_receive_a_bounded_preview(self):
+        contents = "runtime diagnostics\n" + "x" * 70000
+        _, attempt = self.recorded_attempt(outputs=["results.json", "scratch.txt"], scratch=contents)
+        previews = self.engine._attempt_record(attempt["id"])["artifact_previews"]
+        diagnostic = next(item for item in previews if item["path"] == "scratch.txt")
+        self.assertEqual(diagnostic["text"], contents[:65536])
+        self.assertTrue(diagnostic["truncated"])
+        self.assertEqual(diagnostic["next_offset_bytes"], 65536)
 
     def test_recorded_artifact_can_be_read_in_bounded_pages(self):
         _, attempt = self.recorded_attempt()
