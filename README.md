@@ -172,7 +172,7 @@ This app creates its own OAuth session; it does not import another project's or 
 
 `arl provider logout` deletes this store/platform's saved session and cancels pending sign-in. It does not revoke your account globally or terminate a model request already in flight. Credentials are not placed in briefs, experiment environments, or browser storage. The OAuth and Responses protocol follows the [upstream Codex implementation](https://github.com/openai/codex/tree/main/codex-rs); account availability and usage limits still apply.
 
-Codex controls output length. Set `max_output_tokens_per_call` to `null` or omit it; a numeric value is rejected rather than recorded as an unenforced cap. Call budgets, request timeouts, and the response-byte bound still apply. Missing token usage remains unknown.
+Codex controls output length. Set `max_output_tokens_per_call` to `null` or omit it; a numeric value is rejected rather than recorded as an unenforced cap. Call budgets and request timeouts still apply. The transport separately bounds the full event stream at 64 MiB and the assembled public answer at 2 MiB, so event framing does not consume the answer allowance. Missing token usage remains unknown.
 
 ### Spark cluster or another OpenAI-compatible server
 

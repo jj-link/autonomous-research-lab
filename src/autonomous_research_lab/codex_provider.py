@@ -16,6 +16,7 @@ from .model_client import MAX_RESPONSE_BYTES, ModelClient, ModelError, _NoRedire
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
 CLIENT_VERSION = "0.153.4"
+MAX_STREAM_BYTES = 64 * 1024 * 1024
 
 
 def _headers(credentials, stream=True):
@@ -55,6 +56,7 @@ def _body(config, messages):
 
 def _public_text(items):
     text = []
+    size = 0
     for item in items:
         if item.get("type") == "reasoning":
             continue
@@ -69,6 +71,9 @@ def _public_text(items):
                 raise ModelError("Codex refused the request")
             if part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                 raise ModelError("Codex returned unsupported message content")
+            size += len(part["text"].encode("utf-8"))
+            if size > MAX_RESPONSE_BYTES:
+                raise ModelError("Codex public answer exceeds the response-byte limit")
             text.append(part["text"])
     return "".join(text)
 
@@ -79,6 +84,8 @@ class _Events:
         self.data = []
         self.event = None
         self.parts = []
+        self.public_bytes = 0
+        self.completed_bytes = 0
         self.items = {}
         self.output = None
         self.response_id = None
@@ -88,9 +95,20 @@ class _Events:
         raw = "".join(self.parts)
         if not raw:
             items = self.output if self.output else [self.items[i] for i in sorted(self.items)]
-            raw = "".join(part["text"] for item in items
-                          if isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "assistant" and isinstance(item.get("content"), list)
-                          for part in item["content"] if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str))
+            fragments, remaining = [], MAX_RESPONSE_BYTES
+            for item in items:
+                if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "assistant" or not isinstance(item.get("content"), list):
+                    continue
+                for part in item["content"]:
+                    if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                        fragment = part["text"][:remaining]
+                        fragments.append(fragment)
+                        remaining -= len(fragment)
+                    if not remaining:
+                        break
+                if not remaining:
+                    break
+            raw = "".join(fragments).encode("utf-8")[:MAX_RESPONSE_BYTES].decode("utf-8", errors="ignore")
         return {"raw": raw, "usage": self.usage, "response_id": self.response_id,
                 "elapsed_seconds": time.monotonic() - self.started}
 
@@ -134,11 +152,17 @@ class _Events:
         if kind == "response.output_text.delta":
             if not isinstance(value.get("delta"), str):
                 raise ModelError("Codex returned an invalid text delta")
+            self.public_bytes += len(value["delta"].encode("utf-8"))
+            if self.public_bytes > MAX_RESPONSE_BYTES:
+                raise ModelError("Codex public answer exceeds the response-byte limit")
             self.parts.append(value["delta"])
         elif kind == "response.output_item.done":
             index, item = value.get("output_index"), value.get("item")
             if type(index) is not int or index < 0 or index in self.items or not isinstance(item, dict):
                 raise ModelError("Codex returned duplicate or invalid completed output")
+            self.completed_bytes += len(_public_text([item]).encode("utf-8"))
+            if self.completed_bytes > MAX_RESPONSE_BYTES:
+                raise ModelError("Codex completed public output exceeds the response-byte limit")
             self.items[index] = item
         elif kind in {"error", "response.failed"}:
             raise ModelError("Codex response failed; no provider was substituted")
@@ -185,8 +209,8 @@ def complete(config, messages, credentials):
                 if not chunk:
                     raise ModelError("Codex stream closed before its terminal response")
                 received += len(chunk)
-                if received > MAX_RESPONSE_BYTES:
-                    raise ModelError("Codex stream exceeded the response-byte limit")
+                if received > MAX_STREAM_BYTES:
+                    raise ModelError("Codex event stream exceeded the transport-byte limit")
                 pending.extend(chunk)
                 while (end := pending.find(b"\n")) >= 0:
                     line = bytes(pending[:end]).rstrip(b"\r").decode("utf-8")

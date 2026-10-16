@@ -82,8 +82,25 @@ class CodexProviderTests(unittest.TestCase):
             self.assertEqual(raised.exception.record["raw"], text)
 
     def test_byte_limit_counts_ignored_keepalives(self):
-        with patch.object(codex_provider, "MAX_RESPONSE_BYTES", 64), self.assertRaises(ModelError):
+        with patch.object(codex_provider, "MAX_STREAM_BYTES", 64), self.assertRaises(ModelError):
             self.complete(b": " + b"x" * 80 + b"\n\n" + terminal([message('{}')]))
+
+    def test_stream_framing_does_not_consume_the_public_answer_allowance(self):
+        stream = event("response.output_text.delta", delta='{"answer":42}') + terminal([message('{"answer":42}')])
+        with patch.object(codex_provider, "MAX_RESPONSE_BYTES", 32), patch.object(codex_provider, "MAX_STREAM_BYTES", 4096):
+            self.assertEqual(self.complete(stream)["content"], {"answer": 42})
+
+    def test_public_answer_bound_applies_to_deltas_and_completed_items(self):
+        text = '{"answer":"' + "x" * 80 + '"}'
+        streams = [
+            event("response.output_text.delta", delta=text),
+            event("response.output_item.done", output_index=0, item=message(text)),
+            terminal([message(text)]),
+        ]
+        for stream in streams:
+            with self.subTest(stream=stream), patch.object(codex_provider, "MAX_RESPONSE_BYTES", 64), self.assertRaises(ModelError) as raised:
+                self.complete(stream)
+            self.assertLessEqual(len(raised.exception.record["raw"].encode()), 64)
 
     def test_partial_failure_evidence_redacts_account_credentials(self):
         text = json.dumps(Auth().credentials())
