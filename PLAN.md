@@ -33,12 +33,14 @@ This document describes planned behavior, not implemented functionality or demon
    - [x] Submit the bounded research brief through the normal lab entrypoint.
    - [ ] Have the lab produce and retain its design and implementation, execute all requested conditions, and grade the fresh responses.
    - [ ] Have the lab analyze its collected evidence and produce both a refinement-oriented follow-up design and a related research-direction design.
+   - [ ] Repair further verified lab-design bugs and blockers exposed during execution; do not bypass them with manual orchestration.
    - **Gate:** no omitted checkpoints, tasks, or seeds; no reused manual-run answers or grades; no assistant-authored replacement for the analyst or research director's output. Producing follow-up designs does not authorize executing additional studies.
 
 4. **Verify the user-facing research deliverable.**
    - [ ] Verify the full 1,152-response inventory and the links between the program, agent calls, designs, executions, grades, analysis, report, and follow-up designs.
    - [ ] Open the actual lab interface and verify that the completed study exposes a readable report answering the question, explaining uncertainty and limitations, and linking its supporting evidence. Raw JSON and a chat summary are not substitutes.
    - [ ] Verify that the lab records its completion/stopping reason and any interventions or failures truthfully; do not label a manually completed stage autonomous.
+   - [ ] Identify remaining oversight requirements from the retained run record for the subsequent autonomy discussion. Defer that broader redesign rather than implementing it as part of this study.
    - [ ] Commit and push remaining permanent changes at the completion milestone.
    - **Completion gate:** the autonomous workflow and its readable in-lab deliverable must both be demonstrated. Successful inference, a finished script, or an analysis file alone is not completion.
 
