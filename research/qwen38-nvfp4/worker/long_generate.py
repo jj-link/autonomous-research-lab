@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import time
 
-from generate import WorkerMetadata, engine_arguments, run_seed_blocks, save
+from generate import WorkerMetadata, aggregate_results, engine_arguments, run_requests, save
 
 
 class LongMetadata(WorkerMetadata):
@@ -51,7 +51,8 @@ def counter(metrics, name):
 def followup_arguments(settings):
     args = engine_arguments(settings)
     args.update(max_model_len=131072, kv_cache_dtype="fp8",
-                safetensors_load_strategy="eager", worker_extension_cls="long_generate.LongMetadata")
+                safetensors_load_strategy=settings["engine_options"].get("safetensors_load_strategy", "eager"),
+                worker_extension_cls="long_generate.LongMetadata")
     return args
 
 
@@ -120,7 +121,12 @@ def main():
         if warm.finish_reason != "stop" or not warm.text.strip():
             raise ValueError("Warmup did not finish normally; no study requests were submitted")
         before = snapshot(llm)
-        run_seed_blocks(llm, tokenizer, frozen, settings, args, load_seconds, warmup_seconds)
+        started = time.monotonic()
+        blocks = run_requests(llm, tokenizer, frozen, settings, args, settings["seeds"], load_seconds, warmup_seconds)
+        result = aggregate_results(frozen, settings, blocks, load_seconds, warmup_seconds)
+        result["metrics"]["generation_wall_seconds"] = time.monotonic() - started
+        result["details"]["throughput_interval"] = "all requested seeds queued together; first submission through last durable completion"
+        save("results.json", result)
         after = snapshot(llm)
         measured = {"preemptions": counter(after, "vllm:num_preemptions") - counter(before, "vllm:num_preemptions")}
         if settings["dflash"]:

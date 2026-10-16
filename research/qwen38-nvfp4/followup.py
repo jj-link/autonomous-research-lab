@@ -10,7 +10,8 @@ import shutil
 from autonomous_research_lab.execution import atomic_json, configuration
 from autonomous_research_lab.models import ExperimentSpec, LabError, Limits, read_json
 from autonomous_research_lab.store import Store
-from analysis import SEEDS, analyze, render_report, select_throughput
+from analysis import SEEDS, analyze, render_report, select_throughput, sustained_throughput
+from model_cache import cache_checkpoint, cached_input_id, release_checkpoint_cache
 from stage_tasks import DATA, file_hash, rows, task_filename
 from study import artifact_file, execute_once, require_completed, retire_completed_grader
 from task_data import prepare_coding_followup
@@ -22,13 +23,15 @@ PROJECT = HERE.parents[1]
 STUDY = PROJECT / ".arl/studies/qwen38-nvfp4"
 STATE = STUDY / "followup-fp8"
 CACHE = PROJECT / ".arl-cache/qwen38-fp8-followup"
+MODEL_CACHE = Path.home() / "Projects" / PROJECT.name / "model-cache-followup"
 CALIBRATION = STUDY / "dflash-calibration-20261015"
 LABELS = ("bf16", "radixark", "quasar")
+MEASURED_LABELS = ("bf16", "radixark")
 MODES = ("plain", "dflash")
 IMAGE = "27e2c317d7b13ac6d7afe0642b350e5ef98c7206109bf7f59dfba20e41c20199"
 GPU = "GPU-6ac06ab6-ac30-f3ad-b246-064a8e6f1309"
 DRAFT_REVISION = "015e795645c74b1a0eeef3b570031fb62e769bc5"
-EXECUTION_REVISION = 2
+EXECUTION_REVISIONS = {"bf16": 2, "radixark": 3, "quasar": 3}
 
 
 def stores():
@@ -122,25 +125,45 @@ def prepare(store):
     return record
 
 
-def model_input(store, label):
+def model_input(store, checkpoint):
+    label = checkpoint["label"]
     receipt = STATE / "models" / f"{label}.json"
     if receipt.exists():
-        return read_json(receipt)["input_id"]
-    if label == "bf16":
-        input_id = read_json(CALIBRATION / "inputs.json")["model"]["input_id"]
-        approved = store.get_input(input_id)
+        source_id = read_json(receipt)["input_id"]
     else:
-        main = Store(PROJECT / ".arl")
-        previous = read_json(STUDY / "staged.json")[label]
-        approved_original = main.get_input(previous["input_id"])
-        approved = store.register_input(main.input_source(previous["input_id"]), f"qwen38-followup-{label}",
-                                        expected_hashes={item["path"]: item["sha256"] for item in approved_original["files"]})
-    atomic_json(receipt, {"input_id": approved["id"], "sha256": approved["sha256"], "bytes": approved["bytes"]})
-    return approved["id"]
+        if label == "bf16":
+            source_id = read_json(CALIBRATION / "inputs.json")["model"]["input_id"]
+            approved = store.get_input(source_id)
+        else:
+            main = Store(PROJECT / ".arl")
+            previous = read_json(STUDY / "staged.json")[label]
+            approved_original = main.get_input(previous["input_id"])
+            approved = store.register_input(main.input_source(previous["input_id"]), f"qwen38-followup-{label}",
+                                            expected_hashes={item["path"]: item["sha256"] for item in approved_original["files"]})
+            source_id = approved["id"]
+        atomic_json(receipt, {"input_id": source_id, "sha256": approved["sha256"], "bytes": approved["bytes"]})
+    if label == "bf16":
+        return source_id
+    print(json.dumps({"admitting_native_checkpoint_cache": label}), flush=True)
+    return cache_checkpoint(store, checkpoint, source_id, MODEL_CACHE)["id"]
+
+
+def release_model(store, label):
+    if label == "bf16":
+        return
+    cached = cached_input_id(MODEL_CACHE)
+    if cached is None:
+        return
+    original = store.get_input(read_json(STATE / "models" / f"{label}.json")["input_id"])
+    if store.get_input(cached)["sha256"] != original["sha256"]:
+        return
+    if any(attempt["gpu_uuid"] == GPU for attempt in store.list_attempts(active_only=True)):
+        raise LabError("A GPU attempt is still active; the owned model cache was retained")
+    release_checkpoint_cache(store, cached, MODEL_CACHE)
 
 
 def generation_path(label, mode, stage):
-    return STATE / "runs" / label / mode / f"{stage}-r{EXECUTION_REVISION}.json"
+    return STATE / "runs" / label / mode / f"{stage}-r{EXECUTION_REVISIONS[label]}.json"
 
 
 def generate(store, protocol, label, mode, seeds, stage):
@@ -153,11 +176,19 @@ def generate(store, protocol, label, mode, seeds, stage):
     speculative = {"method": "dflash", "model": "/inputs/draft", "num_speculative_tokens": 7} if mode == "dflash" else None
     settings = {"checkpoint": label, "repo_id": checkpoint["repo_id"], "revision": checkpoint["revision"],
                 "split": "followup", "seeds": list(seeds), "max_output_tokens": protocol["max_output_tokens"],
-                "execution_revision": EXECUTION_REVISION,
+                "execution_revision": EXECUTION_REVISIONS[label],
                 "dflash": mode == "dflash", "drafter_revision": DRAFT_REVISION if mode == "dflash" else None,
                 "runtime_env": {"VLLM_USE_V2_MODEL_RUNNER": "1", "VLLM_WSL2_ENABLE_PIN_MEMORY": "1"},
                 "engine_options": {**ENGINE_OPTIONS, "max_num_seqs": protocol["items"], "speculative_config": speculative}}
-    bindings = {"model": model_input(store, label), "tokenizer": protocol["inputs"]["tokenizer"],
+    if label != "bf16":
+        settings["engine_options"]["safetensors_load_strategy"] = "lazy"
+    record_path = generation_path(label, mode, stage)
+    if record_path.exists():
+        prior = store.get_experiment(read_json(record_path)["experiment_id"])
+        model_id = prior["manifest"]["inputs"]["model"]
+    else:
+        model_id = model_input(store, checkpoint)
+    bindings = {"model": model_id, "tokenizer": protocol["inputs"]["tokenizer"],
                 "prompts": protocol["inputs"]["prompts"]}
     if mode == "dflash":
         bindings["draft"] = protocol["inputs"]["draft"]
@@ -171,7 +202,7 @@ def generate(store, protocol, label, mode, seeds, stage):
         settings=settings, inputs=bindings, outputs=tuple(outputs), gpu=True,
         limits=Limits(wall_seconds=216000 * len(seeds), memory_bytes=26 * 1024**3,
                       output_bytes=8 * 1024**3, log_bytes=32 * 1024**2, pids=512))
-    attempt = execute_once(store, generation_path(label, mode, stage), spec)
+    attempt = execute_once(store, record_path, spec)
     require_completed(attempt)
     return attempt
 
@@ -204,24 +235,28 @@ def generation_block(store, protocol, label, mode, stage, seed):
     return attempt, summary, generations
 
 
-def compare(store, protocol):
+def select_serving(store, protocol):
     cases = []
-    for index, label in enumerate(LABELS):
-        for mode in MODES if index % 2 == 0 else tuple(reversed(MODES)):
-            generate(store, protocol, label, mode, (17,), "comparison")
-            attempt, summary, _ = generation_block(store, protocol, label, mode, "comparison", 17)
-            runtime = read_json(artifact_file(store, attempt, "runtime.json"))
-            measurements = read_json(artifact_file(store, attempt, "metrics.json"), max_bytes=16 * 1024**2)
+    for label in MEASURED_LABELS:
+        for mode in MODES:
+            pointer = read_json(generation_path(label, mode, "comparison"))
+            attempt = store.get_attempt(pointer["attempt_id"])
+            require_completed(attempt)
+            console = store.attempt_dir(attempt["id"]) / "console.log"
             case = {"mode": mode, "checkpoint": label, "attempt_id": attempt["id"],
-                    **{key: summary["metrics"][key] for key in ("generated_tokens", "generation_wall_seconds", "load_seconds", "warmup_seconds")},
-                    "execution": runtime["worker_execution_state"], "measured": measurements["measured"]}
-            case["aggregate_tokens_per_second"] = case["generated_tokens"] / case["generation_wall_seconds"]
+                    "console_sha256": file_hash(console),
+                    **sustained_throughput(console.read_bytes().decode("utf-8"))}
             cases.append(case)
-            print(json.dumps({"comparison_cell": case}), flush=True)
-    result = select_throughput(cases, LABELS)
+    result = select_throughput(cases, MEASURED_LABELS)
     result["protocol_sha256"] = file_hash(STATE / "protocol.json")
+    result["amendment"] = {
+        "authorization": "User approved choosing from retained concurrent-generation measurements without additional benchmark runs.",
+        "supersedes": "Completion of the three-checkpoint, two-mode seed-17 comparison before selection.",
+        "quality_inventory": {"checkpoints": list(LABELS), "items": protocol["items"], "seeds": list(SEEDS)},
+        "limitation": "One retained window per mode and measured checkpoint; concurrency varies. Not a globally tuned maximum or a QUASAR speed measurement.",
+    }
     immutable_json(STATE / "selection.json", result)
-    print(json.dumps({"selected": result["winner"], "modes": result["modes"]}), flush=True)
+    print(json.dumps({"selected": result["winner"], "modes": result["modes"], "cases": cases}), flush=True)
     return result
 
 
@@ -269,14 +304,16 @@ def run_followup(store, grader, protocol, selection):
     mode = selection["winner"]
     futures = []
     with ThreadPoolExecutor(max_workers=1) as pool:
-        for label in LABELS:
+        for label in MEASURED_LABELS:
             futures.append(pool.submit(grade, store, grader, protocol, label, mode, "comparison", 17))
         for label in LABELS:
             for future in futures:
                 if future.done():
                     future.result()
-            generate(store, protocol, label, mode, (29, 43), "continuation")
-            for seed in (29, 43):
+            seeds = tuple(seed for seed in SEEDS if seed != 17 or label not in MEASURED_LABELS)
+            generate(store, protocol, label, mode, seeds, "continuation")
+            release_model(store, label)
+            for seed in seeds:
                 futures.append(pool.submit(grade, store, grader, protocol, label, mode, "continuation", seed))
         summaries = [future.result() for future in futures]
     results = [row for summary in summaries for row in summary["results"]]
@@ -294,7 +331,7 @@ def main():
     import fcntl
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "prepare", "compare", "run-all"))
+    parser.add_argument("action", choices=("status", "prepare", "select", "run-all"))
     args = parser.parse_args()
     store, grader = stores()
     if args.action == "status":
@@ -315,7 +352,7 @@ def main():
         protocol = prepare(store)
         if args.action == "prepare":
             return
-        selection = compare(store, protocol)
+        selection = select_serving(store, protocol)
         if args.action == "run-all":
             run_followup(store, grader, protocol, selection)
 

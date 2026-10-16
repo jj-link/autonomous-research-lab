@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 import time
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 
 
 def repeated_block(tokens):
@@ -217,8 +217,8 @@ def run_seed_blocks(llm, tokenizer, frozen, settings, engine_args, load_seconds,
     blocks = []
     for index, seed in enumerate(settings["seeds"]):
         try:
-            block = run_requests(llm, tokenizer, frozen, settings, engine_args, seed,
-                                 load_seconds if index == 0 else 0.0, warmup_seconds if index == 0 else 0.0)
+            block, = run_requests(llm, tokenizer, frozen, settings, engine_args, (seed,),
+                                  load_seconds if index == 0 else 0.0, warmup_seconds if index == 0 else 0.0)
         except BaseException:
             with suppress(Exception):
                 save("results.json", aggregate_results(frozen, settings, blocks, load_seconds, warmup_seconds, failed_seed=seed))
@@ -227,8 +227,8 @@ def run_seed_blocks(llm, tokenizer, frozen, settings, engine_args, load_seconds,
         save("results.json", aggregate_results(frozen, settings, blocks, load_seconds, warmup_seconds))
 
 
-def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_seconds, warmup_seconds):
-    """Generate one seed block with explicit external identities and durable rows."""
+def run_requests(llm, tokenizer, frozen, settings, engine_args, seeds, load_seconds, warmup_seconds):
+    """Queue a seed group together, retaining separate identities and durable receipts."""
     from vllm import SamplingParams
     from vllm.sampling_params import RequestOutputKind
     from vllm.renderers.inputs.preprocess import parse_model_prompt
@@ -236,32 +236,39 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_secon
     tasks = frozen["tasks"]
     sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
                 "presence_penalty": 0.0, "frequency_penalty": 0.0, "repetition_penalty": 1.0,
-                "max_tokens": settings.get("max_output_tokens", 16384), "seed": seed, "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
-    errors = recorded = generated_tokens = 0
+                "max_tokens": settings.get("max_output_tokens", 16384),
+                "stop_token_ids": frozen["stop_token_ids"], "skip_special_tokens": True}
     engine = llm.llm_engine
-    pending, submitted = {}, {}
+    pending, submitted, states, completed = {}, {}, {}, {}
     tok_params = llm.renderer.default_cmpl_tok_params.with_kwargs()
-    params = SamplingParams(**sampling, output_kind=RequestOutputKind.FINAL_ONLY)
-    def receipt(status, wall_seconds, failure=None):
+
+    def receipt(seed, status, wall_seconds, failure=None):
+        state = states[seed]
         return {"status": status,
-                "metrics": {"requested": len(tasks), "recorded": recorded, "generation_errors": errors,
-                            "generated_tokens": generated_tokens, "generation_wall_seconds": wall_seconds,
-                            "load_seconds": load_seconds, "warmup_seconds": warmup_seconds},
+                "metrics": {"requested": len(tasks), "recorded": state["recorded"], "generation_errors": state["errors"],
+                            "generated_tokens": state["tokens"], "generation_wall_seconds": wall_seconds,
+                            "load_seconds": load_seconds if seed == seeds[0] else 0.0,
+                            "warmup_seconds": warmup_seconds if seed == seeds[0] else 0.0},
                 "details": {"checkpoint": settings["checkpoint"], "repo_id": settings["repo_id"],
                             "revision": settings["revision"], "split": frozen["split"], "seed": seed,
-                            "engine_initialization_seed": engine_args["seed"], "sampling": sampling,
+                            "engine_initialization_seed": engine_args["seed"], "sampling": {**sampling, "seed": seed},
                             "thinking_enabled": frozen["thinking_enabled"], "reasoning_effort": frozen["reasoning_effort"],
                             "max_model_len": engine_args["max_model_len"], "kv_cache_dtype": engine_args["kv_cache_dtype"],
                             "runtime_path": "../runtime.json", "warmup_path": "../warmup.json",
-                            "request_latency_includes_queue": True,
-                            "throughput_interval": "first submission through last durable completion",
+                            "request_latency_includes_queue": True, "concurrent_seeds": list(seeds),
+                            "throughput_interval": "this seed's first submission through last durable completion; overlaps other queued seeds",
                             "failure": failure}}
 
-    block_directory = Path("/workspace", f"seed-{seed}")
-    block_directory.mkdir()
-    with (block_directory / "generations.jsonl").open("x", encoding="utf-8") as destination:
-        def persist(task, result):
-            nonlocal errors, recorded, generated_tokens
+    with ExitStack() as files:
+        for seed in seeds:
+            directory = Path("/workspace", f"seed-{seed}")
+            directory.mkdir()
+            destination = files.enter_context((directory / "generations.jsonl").open("x", encoding="utf-8"))
+            states[seed] = {"recorded": 0, "errors": 0, "tokens": 0, "destination": destination}
+
+        def persist(request, result):
+            seed, task = request
+            state = states[seed]
             if result.prompt_token_ids != task["prompt_token_ids"] or len(result.outputs) != 1:
                 raise RuntimeError("Completed response differs from its frozen request")
             output = result.outputs[0]
@@ -269,7 +276,7 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_secon
             error = None
             if output.finish_reason not in {"stop", "length", "repetition"}:
                 error = f"Engine terminated the request with {output.finish_reason!r}"
-                errors += 1
+                state["errors"] += 1
             row = {key: task[key] for key in ("id", "family", "dataset_id", "prompt_sha256", "rendered_prompt_sha256", "prompt_tokens_sha256")}
             row.update(checkpoint=settings["checkpoint"], repo_id=settings["repo_id"], revision=settings["revision"],
                        seed=seed, thinking_enabled=True, prompt_tokens=len(task["prompt_token_ids"]),
@@ -277,43 +284,48 @@ def run_requests(llm, tokenizer, frozen, settings, engine_args, seed, load_secon
                        token_ids=tokens, finish_reason=output.finish_reason, stop_reason=output.stop_reason,
                        error=error, repeated_128_token_block=repeated_block(tokens),
                        generation_seconds=time.monotonic() - submitted[result.request_id])
+            destination = state["destination"]
             destination.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
             destination.flush()
             os.fsync(destination.fileno())
-            recorded += 1
-            generated_tokens += len(tokens)
+            state["recorded"] += 1
+            state["tokens"] += len(tokens)
             print(json.dumps({"seed": seed, "id": row["id"], "tokens": len(tokens), "finish_reason": row["finish_reason"], "error": error}), flush=True)
             if error:
                 raise RuntimeError(error)
+            if state["recorded"] == len(tasks):
+                result = receipt(seed, "completed", time.monotonic() - state["started"])
+                save(f"seed-{seed}/results.json", result)
+                completed[seed] = result
 
-        # The core starts work during submission, so timing must start before enqueue.
-        batch_started = time.monotonic()
         try:
-            for task in tasks:
-                identity = f"seed-{seed}/{task['id']}"
-                if identity in pending:
-                    raise ValueError("Duplicate frozen request identity")
-                pending[identity] = task
-                submitted[identity] = time.monotonic()
-                prompt = {"prompt_token_ids": task["prompt_token_ids"]}
-                parsed = parse_model_prompt(llm.model_config, prompt)
-                (engine_input,) = llm.renderer.render_cmpl([parsed], tok_params)
-                # add_request returns an internal randomized ID; outputs use this external ID.
-                engine.add_request(identity, engine_input, params)
+            for seed in seeds:
+                params = SamplingParams(**sampling, seed=seed, output_kind=RequestOutputKind.FINAL_ONLY)
+                states[seed]["started"] = time.monotonic()
+                for task in tasks:
+                    identity = f"seed-{seed}/{task['id']}"
+                    if identity in pending:
+                        raise ValueError("Duplicate frozen request identity")
+                    pending[identity] = (seed, task)
+                    submitted[identity] = time.monotonic()
+                    prompt = {"prompt_token_ids": task["prompt_token_ids"]}
+                    parsed = parse_model_prompt(llm.model_config, prompt)
+                    (engine_input,) = llm.renderer.render_cmpl([parsed], tok_params)
+                    # Outputs retain this external ID, including the seed.
+                    engine.add_request(identity, engine_input, params)
             consume_completed(engine, pending, persist)
-            generation_wall_seconds = time.monotonic() - batch_started
             engine.do_log_stats()
         except BaseException as error:
-            generation_wall_seconds = time.monotonic() - batch_started
             with suppress(Exception):
                 engine.abort_request(list(pending))
-            with suppress(Exception):
-                save(f"seed-{seed}/results.json", receipt("failed", generation_wall_seconds,
-                                                       f"{type(error).__name__}: {error}"))
+            for seed, state in states.items():
+                if seed not in completed:
+                    with suppress(Exception):
+                        save(f"seed-{seed}/results.json", receipt(
+                            seed, "failed", time.monotonic() - state["started"] if "started" in state else 0.0,
+                            f"{type(error).__name__}: {error}"))
             raise
-    result = receipt("completed", generation_wall_seconds)
-    save(f"seed-{seed}/results.json", result)
-    return result
+    return [completed[seed] for seed in seeds]
 
 
 if __name__ == "__main__":

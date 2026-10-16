@@ -1,9 +1,11 @@
 """Paired item-level inference for the predeclared Qwen3.8 comparison."""
 from __future__ import annotations
 
+from datetime import datetime
 from itertools import combinations
 import math
 import random
+import re
 
 SEEDS = (17, 29, 43)
 ANALYSIS_SEED = 20261011
@@ -160,29 +162,68 @@ def validate_rows(rows, expected_ids, checkpoints):
     return indexed
 
 
+def sustained_throughput(console):
+    """Integrate logged output rates over a fixed window, without selecting peaks."""
+    pattern = re.compile(
+        r"Avg prompt throughput: [0-9.]+ tokens/s, Avg generation throughput: ([0-9.]+) tokens/s, "
+        r"Running: (\d+) reqs, Waiting: (\d+) reqs, GPU KV cache usage: ([0-9.]+)%"
+    )
+    samples = []
+    for number, line in enumerate(console.split("\n"), 1):
+        match = pattern.search(line)
+        if match:
+            stamp = re.sub(r"(\.\d{6})\d+", r"\1", line.split()[0])
+            samples.append({"time": datetime.fromisoformat(stamp).timestamp(), "line": number,
+                            "tokens_per_second": float(match[1]), "running": int(match[2]),
+                            "waiting": int(match[3]), "kv_percent": float(match[4])})
+    if len(samples) < 2:
+        raise ValueError("No sustained generation measurements")
+    start, end = samples[0]["time"] + 60, samples[0]["time"] + 360
+    intervals = []
+    for previous, sample in zip(samples, samples[1:]):
+        if sample["time"] <= previous["time"]:
+            raise ValueError("Non-increasing generation measurement timestamps")
+        seconds = max(0, min(end, sample["time"]) - max(start, previous["time"]))
+        if seconds:
+            if sample["time"] - previous["time"] > 30 or sample["running"] < 2:
+                raise ValueError("The fixed window lacks continuous concurrent-generation evidence")
+            intervals.append({**sample, "seconds": seconds})
+    seconds = sum(item["seconds"] for item in intervals)
+    if not math.isclose(seconds, 300, abs_tol=0.001):
+        raise ValueError("Incomplete five-minute generation window")
+    tokens = sum(item["tokens_per_second"] * item["seconds"] for item in intervals)
+    return {"estimated_generated_tokens": tokens, "measured_seconds": seconds,
+            "aggregate_tokens_per_second": tokens / seconds,
+            "window_start_unix_seconds": start, "window_end_unix_seconds": end,
+            "console_lines": [intervals[0]["line"], intervals[-1]["line"]],
+            **{f"{key}_range": [min(item[key] for item in intervals), max(item[key] for item in intervals)]
+               for key in ("running", "waiting", "kv_percent")}}
+
+
 def select_throughput(cases, checkpoints):
-    """Choose one common engine by total output tokens / total generation time."""
+    """Choose one common engine from time-weighted retained measurement windows."""
     wanted = {(mode, label) for mode in ("plain", "dflash") for label in checkpoints}
     indexed = {}
     for case in cases:
         key = (case["mode"], case["checkpoint"])
         if key not in wanted or key in indexed:
             raise ValueError("Unexpected or duplicate throughput comparison cell")
-        if (type(case["generated_tokens"]) is not int or case["generated_tokens"] <= 0
-                or not math.isfinite(case["generation_wall_seconds"]) or case["generation_wall_seconds"] <= 0):
+        if (not isinstance(case["estimated_generated_tokens"], (int, float))
+                or not math.isfinite(case["estimated_generated_tokens"]) or case["estimated_generated_tokens"] <= 0
+                or not math.isfinite(case["measured_seconds"]) or case["measured_seconds"] <= 0):
             raise ValueError("Invalid measured throughput numerator or duration")
         indexed[key] = case
     if not checkpoints or set(indexed) != wanted:
         raise ValueError("Throughput comparison is incomplete")
     modes = {}
     for mode in ("plain", "dflash"):
-        tokens = sum(indexed[mode, label]["generated_tokens"] for label in checkpoints)
-        seconds = sum(indexed[mode, label]["generation_wall_seconds"] for label in checkpoints)
-        modes[mode] = {"generated_tokens": tokens, "generation_wall_seconds": seconds,
+        tokens = sum(indexed[mode, label]["estimated_generated_tokens"] for label in checkpoints)
+        seconds = sum(indexed[mode, label]["measured_seconds"] for label in checkpoints)
+        modes[mode] = {"estimated_generated_tokens": tokens, "measured_seconds": seconds,
                        "aggregate_tokens_per_second": tokens / seconds}
     winner = max(modes, key=lambda mode: (modes[mode]["aggregate_tokens_per_second"], mode == "plain"))
     return {"winner": winner, "modes": modes, "cases": cases,
-            "selection_rule": "total generated tokens / total generation wall seconds across all checkpoints; plain on an exact tie"}
+            "selection_rule": "time-weighted logged generation rate during seconds 60–360 after the first runtime sample, pooled across measured checkpoints; plain on an exact tie"}
 
 
 def analyze(rows, expected_ids, checkpoints, *, resamples=RESAMPLES):

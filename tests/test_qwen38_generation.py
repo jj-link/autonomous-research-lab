@@ -1,6 +1,10 @@
 from copy import deepcopy
+from contextlib import nullcontext
 import importlib.util
+import io
+import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -154,12 +158,13 @@ class SeedReceiptStateTests(unittest.TestCase):
         def persist(name, value):
             durable[name] = deepcopy(value)
 
-        def generate_block(llm, tokenizer, frozen, settings, engine_args, seed, load_seconds, warmup_seconds):
+        def generate_block(llm, tokenizer, frozen, settings, engine_args, seeds, load_seconds, warmup_seconds):
+            seed, = seeds
             attempted.append(seed)
             if seed == 17:
                 persist("seed-17/generations.jsonl", first_rows)
                 persist("seed-17/results.json", completed)
-                return deepcopy(completed)
+                return [deepcopy(completed)]
             persist("seed-29/results.json", {"status": "failed", "metrics": {"recorded": 1}})
             raise RuntimeError("GPU failed after one response in the second block")
 
@@ -175,6 +180,95 @@ class SeedReceiptStateTests(unittest.TestCase):
         self.assertEqual(root["details"]["failed_seed"], 29)
         self.assertEqual(root["metrics"], completed["metrics"])
         self.assertNotIn("seed-43/results.json", durable)
+
+
+class ConcurrentSeedQueueTests(unittest.TestCase):
+    def test_all_seeds_are_queued_and_completed_seed_survives_another_seed_failure(self):
+        task = {"id": "coding/shared", "family": "coding", "dataset_id": "shared",
+                "prompt_sha256": "public", "rendered_prompt_sha256": "rendered",
+                "prompt_tokens_sha256": "tokens", "prompt_token_ids": [101]}
+        frozen = {"tasks": [task], "split": "followup", "stop_token_ids": [99],
+                  "thinking_enabled": True, "reasoning_effort": "xhigh"}
+        settings = {"checkpoint": "reference", "repo_id": "repo", "revision": "revision",
+                    "seeds": [29, 43], "max_output_tokens": 100000}
+        modules = {
+            "vllm": SimpleNamespace(SamplingParams=lambda **values: SimpleNamespace(**values)),
+            "vllm.sampling_params": SimpleNamespace(RequestOutputKind=SimpleNamespace(FINAL_ONLY="final")),
+            "vllm.renderers.inputs.preprocess": SimpleNamespace(parse_model_prompt=lambda config, prompt: prompt),
+        }
+        for fail_later in (False, True):
+            with self.subTest(fail_later=fail_later):
+                streams, receipts, queue_sizes = {}, {}, []
+
+                class Buffer(io.StringIO):
+                    def fileno(self):
+                        return 1
+
+                class Directory:
+                    def __init__(self, root, seed):
+                        self.seed = seed
+
+                    def mkdir(self):
+                        pass
+
+                    def __truediv__(self, name):
+                        return self
+
+                    def open(self, *args, **kwargs):
+                        streams[self.seed] = Buffer()
+                        return nullcontext(streams[self.seed])
+
+                class Engine:
+                    def __init__(self):
+                        self.queued = []
+
+                    def add_request(self, identity, prompt, params):
+                        self.queued.append((identity, prompt, params))
+
+                    def has_unfinished_requests(self):
+                        return bool(self.queued)
+
+                    def step(self):
+                        queue_sizes.append(len(self.queued))
+                        if fail_later and len(self.queued) == 1:
+                            raise RuntimeError("GPU failed after seed 43 completed")
+                        identity, prompt, params = self.queued.pop()
+                        output = SimpleNamespace(token_ids=[params.seed], text=str(params.seed),
+                                                 finish_reason="stop", stop_reason=99)
+                        return [SimpleNamespace(request_id=identity, finished=True,
+                                                prompt_token_ids=prompt["prompt_token_ids"], outputs=[output])]
+
+                    def do_log_stats(self):
+                        pass
+
+                    def abort_request(self, identities):
+                        self.queued.clear()
+
+                def persist(path, value):
+                    receipts[path] = deepcopy(value)
+
+                engine = Engine()
+                renderer = SimpleNamespace(default_cmpl_tok_params=SimpleNamespace(with_kwargs=lambda: None),
+                                           render_cmpl=lambda prompts, params: prompts)
+                llm = SimpleNamespace(llm_engine=engine, renderer=renderer, model_config=None)
+                tokenizer = SimpleNamespace(decode=lambda tokens, **kwargs: str(tokens))
+                expectation = self.assertRaisesRegex(RuntimeError, "GPU failed") if fail_later else nullcontext()
+                with patch.dict(sys.modules, modules), patch.object(generate, "Path", Directory), \
+                        patch.object(generate.os, "fsync"), patch.object(generate, "save", side_effect=persist):
+                    with expectation:
+                        generate.run_requests(llm, tokenizer, frozen, settings,
+                                              {"seed": 29, "max_model_len": 131072, "kv_cache_dtype": "fp8"},
+                                              (29, 43), 12, 3)
+                self.assertEqual(queue_sizes[0], 2)
+                self.assertEqual(receipts["seed-43/results.json"]["status"], "completed")
+                response = json.loads(streams["seed-43"].getvalue())
+                self.assertEqual((response["id"], response["seed"], response["token_ids"]), ("coding/shared", 43, [43]))
+                if fail_later:
+                    self.assertEqual(receipts["seed-29/results.json"]["status"], "failed")
+                    self.assertEqual(receipts["seed-29/results.json"]["metrics"]["recorded"], 0)
+                else:
+                    response = json.loads(streams["seed-29"].getvalue())
+                    self.assertEqual((response["seed"], response["token_ids"]), (29, [29]))
 
 
 if __name__ == "__main__":

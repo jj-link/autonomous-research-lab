@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import math
 from pathlib import Path
@@ -159,7 +160,7 @@ class PairedAnalysisTests(unittest.TestCase):
 
     def test_engine_choice_uses_total_time_not_average_checkpoint_rates(self):
         cases = [
-            {"mode": mode, "checkpoint": label, "generated_tokens": 1000, "generation_wall_seconds": seconds}
+            {"mode": mode, "checkpoint": label, "estimated_generated_tokens": 1000, "measured_seconds": seconds}
             for mode, timings in (("plain", (1, 1000)), ("dflash", (10, 10)))
             for label, seconds in zip(("reference", "candidate"), timings)
         ]
@@ -171,9 +172,27 @@ class PairedAnalysisTests(unittest.TestCase):
             analysis.select_throughput(cases[:-1], ("reference", "candidate"))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             analysis.select_throughput(cases + [cases[0]], ("reference", "candidate"))
-        cases[0]["generation_wall_seconds"] = math.nan
+        cases[0]["measured_seconds"] = math.nan
         with self.assertRaisesRegex(ValueError, "duration"):
             analysis.select_throughput(cases, ("reference", "candidate"))
+
+    def test_sustained_window_excludes_ramp_and_tail_and_weights_elapsed_time(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        lines = []
+        for second in range(0, 401, 10):
+            rate = 10000 if second <= 60 or second > 360 else (100 if second <= 160 else 400)
+            lines.append(
+                f"{(start + timedelta(seconds=second)).isoformat()} stdout F "
+                f"Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: {rate} tokens/s, "
+                "Running: 64 reqs, Waiting: 20 reqs, GPU KV cache usage: 95.0%"
+            )
+        result = analysis.sustained_throughput("\n".join(lines))
+        self.assertEqual(result["estimated_generated_tokens"], 90000)
+        self.assertEqual(result["aggregate_tokens_per_second"], 300)
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            analysis.sustained_throughput("\n".join(lines[:30]))
+        with self.assertRaisesRegex(ValueError, "continuous"):
+            analysis.sustained_throughput("\n".join(lines[:10] + lines[14:]))
 
 
 if __name__ == "__main__":
