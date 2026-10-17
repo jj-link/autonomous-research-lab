@@ -97,6 +97,36 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(program["decisions"], [])
         self.assertEqual(program["usage"]["model_calls"], 1)
 
+    def test_explicit_resume_supplies_bounded_validation_feedback_without_erasing_failure(self):
+        for size in (100, 70000):
+            with self.subTest(response_bytes=size):
+                program = self.engine.create(self.program["brief"])
+                self.id = program["id"]
+                rejected = {"action": "finish", "rationale": "x" * size, "evidence_refs": ["invented_record"]}
+                failed_id = self.pending(rejected)
+                blocked = self.engine.work(self.id)
+                self.assertEqual(blocked["state"], "blocked")
+                def correct(messages, max_tokens):
+                    payload = json.loads(messages[-1]["content"])
+                    feedback = payload["previous_response_error"]
+                    self.assertEqual(feedback["call_id"], failed_id)
+                    self.assertEqual(feedback["error"], blocked["calls"][-1]["error"])
+                    self.assertEqual(feedback["response_truncated"], size > 65536)
+                    if size < 65536:
+                        self.assertEqual(feedback["rejected_response"]["evidence_refs"], ["invented_record"])
+                    else:
+                        self.assertLessEqual(len(feedback["rejected_response_excerpt"].encode()), 65536)
+                    answer = {"action": "finish", "rationale": "No supported experiment is available", "evidence_refs": []}
+                    return {"content": answer, "raw": json.dumps(answer), "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
+                with patch.object(self.engine, "_preflight", return_value={}), patch(
+                        "autonomous_research_lab.research.ModelClient.complete", side_effect=correct):
+                    resumed = self.engine.resume(self.id, background=False)
+                self.assertEqual(resumed["state"], "completed")
+                self.assertEqual(resumed["calls"][0], blocked["calls"][0])
+                self.assertEqual(resumed["calls"][-1]["status"], "completed")
+                self.assertEqual(resumed["usage"]["model_calls"], 2)
+                self.assertEqual(resumed["implementations"], [])
+
     def test_missing_credential_blocks_before_requests_or_execution(self):
         brief = self.program["brief"]
         brief["model"]["api_key_env"] = "ARL_TEST_DELIBERATELY_ABSENT"

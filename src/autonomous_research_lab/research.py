@@ -440,6 +440,20 @@ class ResearchEngine:
         call_limit = program["brief"].get("max_model_calls")
         if call_limit is not None and len(program["calls"]) >= call_limit:
             raise BudgetReached("Model-call budget exhausted")
+        previous = program["calls"][-1] if program["calls"] else None
+        if previous and previous["role"] == role and previous["status"] == "invalid":
+            record = read_json(self.folder(program_id) / "calls" / (previous["id"] + ".json"), 16 * 1024**2)
+            rejected = record["response"]["content"]
+            encoded = canonical_json(rejected).encode("utf-8")
+            error = previous["error"].encode("utf-8")
+            feedback = {"call_id": previous["id"], "error": error[:8192].decode("utf-8", errors="ignore"),
+                        "error_truncated": len(error) > 8192, "response_truncated": len(encoded) > 65536,
+                        "instruction": "Correct the rejected response under the same approved task and constraints; do not invent replacement evidence or identifiers."}
+            if len(encoded) <= 65536:
+                feedback["rejected_response"] = rejected
+            else:
+                feedback["rejected_response_excerpt"] = encoded[:65536].decode("utf-8", errors="ignore")
+            payload = {**payload, "previous_response_error": feedback}
         messages = [{"role": "system", "content": getattr(prompts, role.upper())}, {"role": "user", "content": canonical_json(payload)}]
         if len(canonical_json(messages).encode()) > 1024 * 1024:
             raise LabError("Model context exceeds the 1 MiB request bound; inspect the retained records")
