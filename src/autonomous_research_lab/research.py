@@ -627,7 +627,7 @@ class ResearchEngine:
             question = {"id": new_id("question"), "text": design["question"], "parent_id": design["parent_question_id"], "status": "open", "history": []}
             p["questions"].append(question)
             design["question_id"] = question["id"]
-            p.update(selected_design_id=design_id, phase="build", pending_call_id=None)
+            p.update(selected_design_id=design_id, phase="build", pending_call_id=None, requested_records=[])
             if design_id in p["fixed_queue"]:
                 p["fixed_queue"].remove(design_id)
         self._change(program_id, select)
@@ -727,6 +727,23 @@ class ResearchEngine:
             records.append({"input": alias, **record})
         return records
 
+    @staticmethod
+    def _retain_inspections(previous, requested):
+        limit = 512 * 1024
+        retained = {}
+        for record in [*previous, *requested]:
+            encoded = canonical_json(record)
+            size = len(encoded.encode("utf-8")) + 1
+            if size + 2 > limit:
+                raise LabError("Inspection record exceeds 512 KiB; request smaller artifact pages instead")
+            retained.pop(encoded, None)
+            retained[encoded] = (record, size)
+        total = 2 + sum(size for _, size in retained.values())
+        while total > limit:
+            _, size = retained.pop(next(iter(retained)))
+            total -= size
+        return [record for record, _ in retained.values()]
+
     def _build(self, program_id):
         program = self.get(program_id)
         design = next(d for d in program["designs"] if d["id"] == program["selected_design_id"])
@@ -756,7 +773,8 @@ class ResearchEngine:
                 records = self._read_records(program, response.get("ids"))
             else:
                 records = self._read_artifacts(program, response.get("artifacts"))
-            self._patch(program_id, requested_records=records, pending_call_id=None)
+            retained = self._retain_inspections(program["requested_records"], records)
+            self._patch(program_id, requested_records=retained, pending_call_id=None)
             return
         call_id = self.get(program_id)["pending_call_id"]
         implementation = next((i for i in prior if i["call_id"] == call_id), None)

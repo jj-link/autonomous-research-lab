@@ -214,6 +214,16 @@ class ResearchTests(unittest.TestCase):
             with self.subTest(relative=relative), self.assertRaises(LabError):
                 self.engine.store.read_input_file(input_id, relative)
 
+    def test_inspection_window_preserves_recent_evidence_within_its_byte_bound(self):
+        first = {"id": "first", "text": "x" * 270000}
+        second = {"id": "second", "text": "y" * 270000}
+        page = {"path": "source.py", "text": "print(7)"}
+        retained = self.engine._retain_inspections([first], [second, page])
+        self.assertEqual(retained, [second, page])
+        self.assertEqual(self.engine._retain_inspections(retained, [second]), [page, second])
+        with self.assertRaises(LabError):
+            self.engine._retain_inspections(retained, [{"text": "x" * (512 * 1024)}])
+
     def test_builder_can_retrieve_prior_design_evidence_without_another_worker(self):
         implementation, attempt = self.recorded_attempt()
         design = {"id": new_id("design"), "question": "Preserve the earlier result", "procedure": "Inspect its evidence",
@@ -229,12 +239,19 @@ class ResearchTests(unittest.TestCase):
         self.engine._patch(self.id, phase="build")
         self.engine._build(self.id)
         program = self.engine.get(self.id)
-        self.assertEqual(json.loads(program["requested_records"][0]["text"]), {"metrics": {"observed": 7}})
+        retained = program["requested_records"]
+        self.assertIn(retrieved, retained)
+        self.assertEqual(json.loads(next(r["text"] for r in retained if r.get("path") == "results.json")),
+                         {"metrics": {"observed": 7}})
         self.assertEqual(program["implementations"], [implementation])
         self.assertEqual(program["usage"]["model_calls"], 2)
         self.assertEqual(program["usage"]["implementation_attempts"], 0)
         self.assertEqual(program["usage"]["attempts"], 0)
         self.assertEqual([item["id"] for item in self.engine.store.list_experiments()], [implementation["experiment_id"]])
+        self.pending({"action": "records", "ids": [attempt["id"]]}, role="builder")
+        self.engine._patch(self.id, phase="build")
+        self.engine._build(self.id)
+        self.assertEqual(len(self.engine.get(self.id)["requested_records"]), 2)
         other = self.engine.create({"goal": "Unrelated evidence namespace",
                                     "model": {"base_url": "https://api.example.com/v1", "model": "protocol-fixture"}})
         with self.assertRaises(LabError):

@@ -68,7 +68,8 @@ Use those records to locate retained source and runtime evidence. Artifact acces
 Instead of an implementation, you may return {action:"read_inputs",inputs:[{input:"alias",path:"relative/file",offset_bytes:0,max_bytes:65536}]}.
 Omit path and use offset_files/max_files to page an input's recorded inventory (at most 64 files per page).
 Up to three requests per call; only selected aliases are readable, and file contents are hash-verified against their approved inventory.
-The next builder call receives these results in requested_records. Each request replaces that read context: request needed pages together.
+Successive builder inspections accumulate in requested_records, deduplicated within a 512 KiB most-recent-evidence window.
+Use retained evidence rather than requesting it again. Oldest records are evicted when the window fills; new designs start with an empty window.
 Inspection consumes model calls but creates no implementation or worker and does not consume a repair attempt.
 Do not submit a worker whose only purpose is to report missing source access; inspect the selected input first.
 Guard multiprocessing/inference entrypoints with if __name__ == "__main__" where required by the declared runtime.
