@@ -24,6 +24,8 @@ Return {action, rationale, evidence_refs, ...}. Actions:
   Independent CPU scoring jobs may share generated code while executing in separate containers using a builder batch.
   First generate a jobs.json index and per-job response files as declared outputs, then design the isolated scoring batch,
   then design analysis of its published batch.json and per-job artifacts. Native-cached checkpoint stages must select one checkpoint at a time.
+  Failed attempts can publish retained outputs, explicitly labeled with their failed execution state.
+  Inspect and validate these before deciding what needs repeating; failure does not imply all collected data are unusable.
   Execute all required generation, grading and statistical analysis before finishing. Reserve calls for analysis, a final reporter and ideator.
 - search: query (literature metadata search); fetch: url (public HTTPS text/HTML). Neither provides arbitrary network access to experiments.
 - records: ids (up to three existing IDs) to retrieve earlier records missing from the bounded context.
@@ -73,6 +75,9 @@ Guard multiprocessing/inference entrypoints with if __name__ == "__main__" where
 Never generate files under data/: the coordinator supplies those immutable inputs. Write results.json containing {metrics:{name:number},details:{...}}.
 Include raw trial measurements, seeds, reference computations and limitations as needed. Expected output names must include results.json.
 Declare every file needed by later stages in outputs; a directory prefix ending in / includes that subtree.
+Every declared output is REQUIRED for a successful execution, including directory prefixes (at least one collected file).
+Do not declare an error-only file as a required success output. Put conditional diagnostics under an always-populated declared directory.
+Retained inputs labeled failed are evidence to validate, not successful execution or validated scientific results.
 Only declared collected outputs are handed to later workers. Do not enumerate thousands of filenames; declare their directory prefix.
 Keep bulky response text in separate artifacts, not results.json; results.json is a bounded numerical summary for the research agents.
 A prior failure is supplied for repairs: correct the implementation without changing the design or erasing the failed attempt.

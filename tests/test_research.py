@@ -240,7 +240,7 @@ class ResearchTests(unittest.TestCase):
         with self.assertRaises(LabError):
             self.engine._read_records(other, [attempt["id"]])
 
-    def recorded_attempt(self, *, inputs=None, metrics=None, outputs=None, scratch="not a declared handoff"):
+    def recorded_attempt(self, *, inputs=None, metrics=None, outputs=None, scratch="not a declared handoff", state="completed"):
         code = self.folder / uuid.uuid4().hex
         code.mkdir()
         (code / "main.py").write_text("pass\n")
@@ -257,7 +257,7 @@ class ResearchTests(unittest.TestCase):
         (output / "scratch.txt").write_text(scratch)
         artifacts = [{"path": name, "sha256": hashlib.sha256((output / name).read_bytes()).hexdigest(),
                       "bytes": (output / name).stat().st_size} for name in ("results.json", "scratch.txt")]
-        attempt = self.engine.store.update_attempt(attempt["id"], state="completed", result={
+        attempt = self.engine.store.update_attempt(attempt["id"], state=state, result={
             "artifacts": artifacts, "observations": json.loads(contents)})
         implementation = {"id": new_id("implementation"), "design_id": new_id("design"), "status": "collected",
                           "attempt_id": attempt["id"], "experiment_id": experiment["id"]}
@@ -374,6 +374,24 @@ class ResearchTests(unittest.TestCase):
         result = self.engine.work(self.id)
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["designs"], [])
+
+    def test_failed_outputs_remain_usable_without_promoting_failure_to_success(self):
+        implementation, attempt = self.recorded_attempt(state="failed", outputs=["results.json", "failure.json"])
+        self.engine._change(self.id, lambda p: p["brief"].update(completion_metrics={"observed": 7}))
+        self.engine._publish_outputs(self.id, implementation, attempt)
+        saved = self.engine.get(self.id)["implementations"][-1]
+        published = saved["published_input"]
+        record = self.engine.store.verify_input(published["id"])
+        self.assertEqual([item["path"] for item in record["files"]], ["results.json"])
+        self.assertEqual(json.loads(self.engine.store.read_input_file(record["id"], "results.json")["text"]),
+                         {"metrics": {"observed": 7}})
+        self.assertEqual(published["execution_state"], "failed")
+        self.assertEqual(published["attempt_id"], attempt["id"])
+        visible = self.engine._input_records(self.engine.get(self.id))[published["alias"]]
+        self.assertEqual(visible["execution_state"], "failed")
+        self.assertEqual(self.engine.store.get_attempt(attempt["id"])["state"], "failed")
+        with self.assertRaises(LabError):
+            self.engine._check_completion(self.engine.get(self.id))
 
     def test_changed_artifact_cannot_be_registered_as_recorded_evidence(self):
         implementation, attempt = self.recorded_attempt()

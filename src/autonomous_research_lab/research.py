@@ -382,10 +382,14 @@ class ResearchEngine:
         for alias, record in records.items():
             files = self.store.get_input(record["id"])["files"]
             record.update(private=record["id"] in private_ids, files=files[:64], files_truncated=len(files) > 64)
+        for item in program["implementations"]:
+            published = item.get("published_input") or {}
+            if published.get("attempt_id"):
+                records[published["alias"]].update(attempt_id=published["attempt_id"], execution_state=published["execution_state"])
         return records
 
     def _publish_outputs(self, program_id, implementation, attempt):
-        if implementation.get("published_input") or attempt["state"] != "completed":
+        if implementation.get("published_input") or attempt["state"] not in ("completed", "failed"):
             return
         manifest = self.store.get_experiment(implementation["experiment_id"])["manifest"]
         spec = ExperimentSpec.from_dict(manifest, self.store.root)
@@ -395,11 +399,12 @@ class ResearchEngine:
         folder = batches.namespace(self.store) / program_id / attempt["id"]
         output = self.store.attempt_dir(attempt["id"]) / "output"
         files = {item["path"]: (output, item["path"], item["sha256"]) for item in artifacts}
-        record = batches.snapshot_files(self.store, folder, files, "artifacts-" + attempt["id"])
+        record = batches.snapshot_files(self.store, folder, files, "artifacts-" + attempt["id"] + "-" + attempt["state"])
         program = self.get(program_id)
         _, private_ids = self._available_inputs(program)
         published = {"alias": "output_" + attempt["id"][4:], "id": record["id"],
-                     "private": bool(private_ids.intersection(manifest.get("inputs", {}).values()))}
+                     "private": bool(private_ids.intersection(manifest.get("inputs", {}).values())),
+                     "attempt_id": attempt["id"], "execution_state": attempt["state"]}
         self._change(program_id, lambda p: next(i for i in p["implementations"] if i["id"] == implementation["id"]).update(published_input=published))
 
 
