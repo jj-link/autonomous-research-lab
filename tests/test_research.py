@@ -8,6 +8,7 @@ from unittest.mock import patch
 import uuid
 
 from autonomous_research_lab.execution import atomic_json
+from autonomous_research_lab.model_client import ModelError
 from autonomous_research_lab.models import ExperimentSpec, LabError
 from autonomous_research_lab.research import ResearchEngine, new_id, resource_spec, validate_brief, within
 from autonomous_research_lab.store import Store
@@ -120,10 +121,32 @@ class ResearchTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(LabError):
                 within({**allowed, field: value}, allowed)
 
-    def test_data_paths_and_unbounded_budgets_are_rejected(self):
-        for extra in ({"data_files": {"../secret": "x"}}, {"max_model_calls": 101}, {"max_repairs": True}, {"max_experiments": 0}):
+    def test_invalid_data_paths_and_resource_limits_are_rejected(self):
+        for extra in ({"data_files": {"../secret": "x"}}, {"max_repairs": True}, {"max_experiments": 0}):
             with self.subTest(extra=extra), self.assertRaises(LabError):
                 validate_brief({**self.program["brief"], **extra})
+
+    def test_model_call_limit_is_optional_or_an_explicit_positive_integer(self):
+        for value in (None, 1, 101):
+            with self.subTest(value=value):
+                brief = validate_brief({**self.program["brief"], "max_model_calls": value})
+                self.assertEqual(brief["max_model_calls"], value)
+        for value in (0, -1, True, 1.5, "100"):
+            with self.subTest(value=value), self.assertRaises(LabError):
+                validate_brief({**self.program["brief"], "max_model_calls": value})
+
+    def test_uncapped_call_beyond_one_hundred_preserves_failure_accounting(self):
+        prior = [{"id": new_id("call"), "role": "director", "status": "failed", "usage": None} for _ in range(100)]
+        self.engine._change(self.id, lambda p: (p.update(state="running", phase="decide", calls=prior),
+                                                p["usage"].update(model_calls=100, unknown_token_calls=100)))
+        with patch("autonomous_research_lab.research.ModelClient.complete", side_effect=ModelError("Recorded transport failure")):
+            with self.assertRaisesRegex(LabError, "Recorded transport failure"):
+                self.engine._call(self.id, "director", {})
+        program = self.engine.get(self.id)
+        self.assertEqual(program["calls"][:-1], prior)
+        self.assertEqual(program["calls"][-1]["status"], "failed")
+        self.assertEqual(program["usage"]["model_calls"], 101)
+        self.assertEqual(program["usage"]["unknown_token_calls"], 101)
 
     def test_builder_cannot_drop_replace_rename_or_expand_approved_inputs(self):
         ids = []

@@ -67,7 +67,9 @@ def validate_brief(value):
         raise LabError("scope must be text of at most 12000 characters")
     if brief["policy"] not in POLICIES:
         raise LabError("Unknown research policy")
-    for key, default, low, high in (("max_experiments", 2, 1, 2000), ("max_model_calls", 12, 1, 100),
+    call_limit = value.get("max_model_calls")
+    brief["max_model_calls"] = None if call_limit is None else positive_int(call_limit, "max_model_calls")
+    for key, default, low, high in (("max_experiments", 2, 1, 2000),
                                     ("max_wall_seconds", 600, 1, 86400), ("max_repairs", 1, 0, 3), ("max_parallel_workers", 1, 1, 8)):
         count = positive_int(value.get(key, default), key, low)
         if count > high:
@@ -435,7 +437,8 @@ class ResearchEngine:
                 record = {"error": "Coordinator interrupted during request; provider usage is unknown. Explicit resume is required.", "status": "interrupted", "response": {}}
                 self._record_call(program_id, pending, record)
             raise LabError(call.get("error") or "Model request was interrupted; inspect the recorded call before resuming")
-        if len(program["calls"]) >= program["brief"]["max_model_calls"]:
+        call_limit = program["brief"].get("max_model_calls")
+        if call_limit is not None and len(program["calls"]) >= call_limit:
             raise BudgetReached("Model-call budget exhausted")
         messages = [{"role": "system", "content": getattr(prompts, role.upper())}, {"role": "user", "content": canonical_json(payload)}]
         if len(canonical_json(messages).encode()) > 1024 * 1024:

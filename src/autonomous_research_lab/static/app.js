@@ -412,7 +412,7 @@ $("brief-form").addEventListener("submit", async (event) => {
       sources: $("brief-sources").value.split("\n").map((item) => item.trim()).filter(Boolean), data_files: data,
       ...($("brief-inputs").value.trim() ? {inputs: JSON.parse($("brief-inputs").value)} : {}),
       model: modelConfig(),
-      policy: $("brief-policy").value, max_experiments: number("brief-max-experiments", 2), max_model_calls: number("brief-max-calls", 12),
+      policy: $("brief-policy").value, max_experiments: number("brief-max-experiments", 2), max_model_calls: number("brief-max-calls", null),
       max_output_tokens_per_call: $("brief-provider").value === "openai-codex" ? null : number("brief-tokens"), max_wall_seconds: number("brief-max-wall", 600), max_repairs: number("brief-repairs"),
       resources: {gpu: $("brief-gpu").checked, wall_seconds: number("brief-run-wall"), memory_bytes: number("brief-memory") * 1024 ** 2,
         output_bytes: number("brief-output") * 1024 ** 2, log_bytes: number("brief-log") * 1024 ** 2, pids: number("brief-pids"), cpus: number("brief-cpus", null)}

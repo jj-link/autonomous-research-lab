@@ -209,7 +209,7 @@ Save a brief such as this as `brief.json`, replacing `CODEX_MODEL_ID` with an ID
   },
   "policy": "candidate_comparison",
   "max_experiments": 2,
-  "max_model_calls": 12,
+  "max_model_calls": null,
   "max_output_tokens_per_call": null,
   "max_wall_seconds": 600,
   "max_repairs": 1,
@@ -252,6 +252,7 @@ Replace `PROGRAM_ID` with the returned ID. Omit `--wait` to launch a detached co
 - Builder inspections retain distinct prior evidence in a bounded 512 KiB window rather than replacing it on every read. Repeated evidence is deduplicated, oldest entries are evicted when necessary, and selecting a new design clears the window. The total 1 MiB model-context limit and model-call accounting still apply.
 - Adaptive follow-ups cite a prior analysis or execution, including individual isolated batch attempts, and explain the connection. Questions retain parent links, status changes, and supporting evidence.
 - Failed executions, repairs, and planning calls consume their allowances. `max_experiments` counts execution attempts, including failures, not just successful studies.
+- Model calls have no default count limit: omit `max_model_calls`, set it to `null`, or leave the dashboard field blank. An explicitly supplied positive integer is enforced. Calls, token usage, and failures remain recorded whether or not a count limit is set.
 - Declared outputs are required success outputs; put conditional diagnostics inside an always-populated declared directory. Both completed and failed attempts can publish their retained declared artifacts for later validation, with execution state and provenance preserved. Publishing failed-attempt artifacts neither changes the failure nor satisfies study-completion criteria.
 - Pause stops new scheduling and lets an active experiment finish. Stop requests termination of owned execution and keeps available outputs. Recovery reconciles recorded work instead of blindly repeating it.
 - Interrupted or invalid model requests remain recorded. Explicit resume permits a new, separately charged request; unavailable usage is marked unknown.
